@@ -17,6 +17,7 @@ const config = {
   port: parseInt(process.env.PORT || '3000', 10),
   dbPath: path.resolve(__dirname, '..', 'data', 'askelira3.db'),
   apiToken: process.env.API_TOKEN || '',
+  lightpandaUrl: process.env.LIGHTPANDA_URL || '',
 };
 
 config.isAnthropic = !config.llmBaseUrl || config.llmBaseUrl.includes('anthropic');
@@ -27,6 +28,7 @@ config.hasBrave = !!config.braveSearchApiKey;
 config.hasLlm = !!config.llmApiKey;
 config.hasAgentmail = !!config.agentmailKey;
 config.hasApiToken = !!config.apiToken;
+config.hasLightpanda = !!config.lightpandaUrl;
 
 function validate() {
   const issues = [];

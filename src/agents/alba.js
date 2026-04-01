@@ -1,6 +1,7 @@
 const { chat } = require('../llm');
 const { config } = require('../config');
 const { addLog } = require('../db');
+const { wrapInput } = require('../hermes/utils');
 
 const ALBA_SYSTEM = `You are Alba, the research agent for AskElira 3.
 
@@ -24,7 +25,7 @@ Be thorough but concise. Focus on actionable intelligence that David can use to 
 When building software, include specific code patterns, library recommendations, and architecture decisions.`;
 
 /**
- * Research a floor's task. Uses Tavily/Brave if available, otherwise LLM-only.
+ * Research a floor's task. Uses Tavily → Brave → Lightpanda → LLM-only.
  * @param {Object} floor - floor record with name, description, success_condition, deliverable
  * @param {Object} goal - goal record with id, text
  * @param {string[]} [vexFeedback] - issues from Vex Gate 1 (for re-research)
@@ -41,40 +42,65 @@ async function research(floor, goal, vexFeedback) {
   addLog(goalId, floorId, 'Alba', `Starting research for: ${floorName}`);
 
   let searchContext = '';
+  let searchUrls = [];
 
-  // Try web search if configured
+  // Tier 1: Tavily
   if (config.hasTavily) {
-    searchContext = await tavilySearch(`${goalText} ${floorDescription}`);
+    const { context, urls } = await tavilySearch(`${goalText} ${floorDescription}`);
+    searchContext = context;
+    searchUrls = urls;
+  // Tier 2: Brave
   } else if (config.hasBrave) {
-    searchContext = await braveSearch(`${goalText} ${floorDescription}`);
+    const { context, urls } = await braveSearch(`${goalText} ${floorDescription}`);
+    searchContext = context;
+    searchUrls = urls;
   }
 
-  let userMessage = `Goal: ${goalText}
-
-Floor: ${floorName}
-Description: ${floorDescription}
-Success Condition: ${floor.success_condition || 'Meets description'}
-Deliverable: ${floor.deliverable || 'Complete implementation'}`;
-
-  if (searchContext) {
-    userMessage += `\n\nWeb Search Results:\n${searchContext}`;
+  // Tier 3: Lightpanda — enhance with full page content
+  if (config.hasLightpanda) {
+    if (searchUrls.length > 0) {
+      // Scrape top 2 URLs from search results for full content
+      const fullContent = await lightpandaScrape(searchUrls.slice(0, 2));
+      if (fullContent) searchContext += `\n\n## Full Page Content\n${fullContent}`;
+    } else if (!searchContext) {
+      // No search API — use Lightpanda to search DuckDuckGo directly
+      searchContext = await lightpandaSearch(`${goalText} ${floorDescription}`);
+    }
   }
 
-  if (vexFeedback && vexFeedback.length > 0) {
-    userMessage += `\n\nVex Validation Issues (must address these):\n${vexFeedback.map((f, i) => `${i + 1}. ${f}`).join('\n')}`;
-  }
-
-  userMessage += '\n\nProvide structured research notes. Think about what information, patterns, and best practices David needs to build the deliverable.';
+  const userMessage = buildMessage({ goalText, floorName, floorDescription, floor, searchContext, vexFeedback });
 
   const result = await chat(
     [{ role: 'user', content: userMessage }],
-    { system: ALBA_SYSTEM }
+    { system: ALBA_SYSTEM, goalId, floorId, agent: 'Alba' }
   );
 
   addLog(goalId, floorId, 'Alba', `Research complete (${result.length} chars)`);
   console.log(`[Alba] Research complete for: ${floorName}`);
   return result;
 }
+
+function buildMessage({ goalText, floorName, floorDescription, floor, searchContext, vexFeedback }) {
+  let msg = `Goal: ${wrapInput(goalText)}
+
+Floor: ${wrapInput(floorName)}
+Description: ${wrapInput(floorDescription)}
+Success Condition: ${wrapInput(floor.success_condition || 'Meets description')}
+Deliverable: ${wrapInput(floor.deliverable || 'Complete implementation')}`;
+
+  if (searchContext) {
+    msg += `\n\nWeb Research:\n${wrapInput(searchContext, 6000)}`;
+  }
+
+  if (vexFeedback && vexFeedback.length > 0) {
+    msg += `\n\nVex Validation Issues (must address these):\n${vexFeedback.map((f, i) => `${i + 1}. ${wrapInput(f)}`).join('\n')}`;
+  }
+
+  msg += '\n\nProvide structured research notes. Think about what information, patterns, and best practices David needs to build the deliverable.';
+  return msg;
+}
+
+// ── Tavily ──
 
 async function tavilySearch(query) {
   try {
@@ -87,17 +113,19 @@ async function tavilySearch(query) {
         max_results: 5,
       }),
     });
-    if (!res.ok) return '';
+    if (!res.ok) return { context: '', urls: [] };
     const data = await res.json();
-    if (!data.results) return '';
-    return data.results
-      .map(r => `[${r.title}](${r.url})\n${r.content}`)
-      .join('\n\n');
+    if (!data.results) return { context: '', urls: [] };
+    const context = data.results.map(r => `[${r.title}](${r.url})\n${r.content}`).join('\n\n');
+    const urls = data.results.map(r => r.url).filter(Boolean);
+    return { context, urls };
   } catch (err) {
     console.error('[Alba] Tavily search failed:', err.message);
-    return '';
+    return { context: '', urls: [] };
   }
 }
+
+// ── Brave ──
 
 async function braveSearch(query) {
   try {
@@ -110,15 +138,101 @@ async function braveSearch(query) {
         },
       }
     );
-    if (!res.ok) return '';
+    if (!res.ok) return { context: '', urls: [] };
     const data = await res.json();
-    if (!data.web || !data.web.results) return '';
-    return data.web.results
-      .map(r => `[${r.title}](${r.url})\n${r.description}`)
-      .join('\n\n');
+    if (!data.web || !data.web.results) return { context: '', urls: [] };
+    const context = data.web.results.map(r => `[${r.title}](${r.url})\n${r.description}`).join('\n\n');
+    const urls = data.web.results.map(r => r.url).filter(Boolean);
+    return { context, urls };
   } catch (err) {
     console.error('[Alba] Brave search failed:', err.message);
+    return { context: '', urls: [] };
+  }
+}
+
+// ── Lightpanda ──
+
+/**
+ * Scrape an array of URLs using Lightpanda, returning combined text content.
+ * Non-fatal: returns '' on any error.
+ */
+async function lightpandaScrape(urls) {
+  let puppeteer;
+  try {
+    puppeteer = require('puppeteer-core');
+  } catch {
+    console.warn('[Alba] puppeteer-core not installed — skipping Lightpanda scrape');
     return '';
+  }
+
+  let browser;
+  try {
+    browser = await puppeteer.connect({ browserWSEndpoint: config.lightpandaUrl });
+    const results = [];
+
+    for (const url of urls) {
+      try {
+        const page = await browser.newPage();
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        const text = await page.evaluate(() => document.body?.innerText || '');
+        results.push(`[${url}]\n${text.slice(0, 2000)}`);
+        await page.close();
+      } catch (err) {
+        console.warn(`[Alba] Lightpanda failed to scrape ${url}:`, err.message);
+      }
+    }
+
+    return results.join('\n\n---\n\n');
+  } catch (err) {
+    console.error('[Alba] Lightpanda connect failed:', err.message);
+    return '';
+  } finally {
+    if (browser) try { await browser.disconnect(); } catch {}
+  }
+}
+
+/**
+ * Search DuckDuckGo via Lightpanda when no search API is configured.
+ * Returns combined text from top result pages.
+ */
+async function lightpandaSearch(query) {
+  let puppeteer;
+  try {
+    puppeteer = require('puppeteer-core');
+  } catch {
+    return '';
+  }
+
+  let browser;
+  try {
+    browser = await puppeteer.connect({ browserWSEndpoint: config.lightpandaUrl });
+    const page = await browser.newPage();
+
+    // Search DuckDuckGo
+    await page.goto(`https://duckduckgo.com/?q=${encodeURIComponent(query.substring(0, 200))}`, {
+      waitUntil: 'domcontentloaded',
+      timeout: 15000,
+    });
+
+    // Extract top result URLs
+    const urls = await page.evaluate(() => {
+      const links = Array.from(document.querySelectorAll('a[href]'));
+      return links
+        .map(a => a.href)
+        .filter(href => href.startsWith('http') && !href.includes('duckduckgo.com'))
+        .slice(0, 5);
+    });
+    await page.close();
+
+    if (!urls.length) return '';
+
+    console.log(`[Alba] Lightpanda DuckDuckGo found ${urls.length} URLs`);
+    return lightpandaScrape(urls.slice(0, 3));
+  } catch (err) {
+    console.error('[Alba] Lightpanda search failed:', err.message);
+    return '';
+  } finally {
+    if (browser) try { await browser.disconnect(); } catch {}
   }
 }
 

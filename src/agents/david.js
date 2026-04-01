@@ -2,6 +2,7 @@ const { chat } = require('../llm');
 const { addLog } = require('../db');
 const workspace = require('../pipeline/workspace');
 const { parseJSON } = require('../hermes/index');
+const { wrapInput } = require('../hermes/utils');
 
 const DAVID_SYSTEM = `You are David, the builder agent for AskElira 3.
 
@@ -46,39 +47,36 @@ async function davidBuild(floor, research, goalId, feedback, vexFeedback) {
   console.log(`[David] Building: ${floorName}`);
   addLog(goalId, floorId, 'David', `Starting build for: ${floorName}`);
 
-  let userMessage = `Goal Floor: ${floorName}
-Description: ${floor.description || ''}
-Success Condition: ${floor.success_condition || floor.successCondition || 'Meets description'}
-Deliverable: ${floor.deliverable || 'Complete implementation'}
+  let userMessage = `Goal Floor: ${wrapInput(floorName)}
+Description: ${wrapInput(floor.description)}
+Success Condition: ${wrapInput(floor.success_condition || floor.successCondition || 'Meets description')}
+Deliverable: ${wrapInput(floor.deliverable || 'Complete implementation')}
 
 Alba's Research:
-${research}`;
+${wrapInput(research, 3000)}`;
 
   if (feedback) {
     userMessage += `\n\nPrevious Rejection Feedback (MUST address these):
-${feedback}`;
+${wrapInput(feedback)}`;
   }
 
   if (vexFeedback) {
     userMessage += `\n\nVex Validation Issues (MUST fix these):
-${vexFeedback}`;
+${wrapInput(vexFeedback)}`;
   }
 
   // Check if workspace already has files from previous iteration (capped to avoid context overflow)
   const existingFiles = workspace.listFiles(goalId);
   if (existingFiles.length > 0) {
     const summary = workspace.getWorkspaceSummary(goalId, { maxChars: 800, linesPerFile: 10 });
-    userMessage += `\n\nExisting files: ${summary}`;
+    userMessage += `\n\nExisting files: ${wrapInput(summary, 2000)}`;
   }
-
-  // Cap total message to ~3000 chars for MiniMax context limit
-  if (userMessage.length > 3000) userMessage = userMessage.substring(0, 3000) + '\n...(truncated)';
 
   userMessage += '\n\nBuild the complete deliverable. Return JSON with all files.';
 
   const reply = await chat(
     [{ role: 'user', content: userMessage }],
-    { system: DAVID_SYSTEM, maxTokens: 8192 }
+    { system: DAVID_SYSTEM, maxTokens: 8192, goalId, floorId, agent: 'David' }
   );
 
   // Parse the response

@@ -1,5 +1,6 @@
 const { chat } = require('../llm');
 const { addLog, updateFloorVex } = require('../db');
+const { wrapInput } = require('../hermes/utils');
 
 const VEX_RESEARCH_SYSTEM = `You are Vex, the validation agent for AskElira 3. Gate 1: Research Validation.
 
@@ -59,10 +60,10 @@ async function vexValidateResearch(floor, research) {
   try {
     const messages = [{
       role: 'user',
-      content: `Validate this research for building Floor "${floor.name}".\n\nFloor Description: ${floor.description || ''}\nSuccess Condition: ${floor.success_condition || ''}\nExpected Deliverable: ${floor.deliverable || ''}\n\nAlba's Research:\n${research}\n\nReturn your validation as JSON.`
+      content: `Validate this research for building Floor ${wrapInput(floor.name)}.\n\nFloor Description: ${wrapInput(floor.description)}\nSuccess Condition: ${wrapInput(floor.success_condition)}\nExpected Deliverable: ${wrapInput(floor.deliverable)}\n\nAlba's Research:\n${wrapInput(research, 3000)}\n\nReturn your validation as JSON.`
     }];
 
-    const reply = await chat(messages, { system: VEX_RESEARCH_SYSTEM });
+    const reply = await chat(messages, { system: VEX_RESEARCH_SYSTEM, goalId, floorId, agent: 'Vex' });
     const result = parseVexJSON(reply, { valid: true, issues: [], enriched: '', score: 70 });
 
     // Normalize
@@ -105,10 +106,10 @@ async function vexValidateBuild(floor, davidOutput, goalId) {
 
     const messages = [{
       role: 'user',
-      content: `Validate this build output for Floor "${floor.name}".\n\nFloor Description: ${floor.description || ''}\nSuccess Condition: ${floor.success_condition || ''}\nExpected Deliverable: ${floor.deliverable || ''}\n\nDavid's Output:\n${outputStr.substring(0, 8000)}\n\nReturn your validation as JSON.`
+      content: `Validate this build output for Floor ${wrapInput(floor.name)}.\n\nFloor Description: ${wrapInput(floor.description)}\nSuccess Condition: ${wrapInput(floor.success_condition)}\nExpected Deliverable: ${wrapInput(floor.deliverable)}\n\nDavid's Output:\n${wrapInput(outputStr, 8000)}\n\nReturn your validation as JSON.`
     }];
 
-    const reply = await chat(messages, { system: VEX_BUILD_SYSTEM });
+    const reply = await chat(messages, { system: VEX_BUILD_SYSTEM, goalId, floorId, agent: 'Vex' });
     const result = parseVexJSON(reply, { valid: true, issues: [], securityFlags: [], score: 60 });
 
     // Normalize
