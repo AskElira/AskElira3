@@ -84,6 +84,20 @@ async function ollamaChat(messages, { model = 'qwen2.5:7b', system, maxTokens = 
  * @param {number} [opts.maxTokens=4096]
  * @returns {Promise<string>} assistant reply text
  */
+async function withRetry(fn, retries = 3, baseDelay = 1000) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const retryable = /429|500|503/.test(err.message);
+      if (!retryable || attempt === retries) throw err;
+      const delay = baseDelay * Math.pow(2, attempt - 1);
+      console.warn(`[LLM] Retry ${attempt}/${retries} in ${delay}ms — ${err.message}`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+}
+
 function stripThinking(text) {
   return text
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
@@ -132,7 +146,7 @@ async function anthropicChat(messages, { model, system, maxTokens, goalId, floor
   };
   if (system) body.system = system;
 
-  const res = await fetch(url, {
+  const res = await withRetry(() => fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -140,12 +154,13 @@ async function anthropicChat(messages, { model, system, maxTokens, goalId, floor
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Anthropic API error ${res.status}: ${errText}`);
-  }
+  }).then(async r => {
+    if (!r.ok) {
+      const errText = await r.text();
+      throw new Error(`Anthropic API error ${r.status}: ${errText}`);
+    }
+    return r;
+  }));
 
   const data = await res.json();
   if (!data.content || !data.content.length) {
@@ -182,19 +197,20 @@ async function openaiChat(messages, { model, system, maxTokens, goalId, floorId,
     messages: allMessages,
   };
 
-  const res = await fetch(url, {
+  const res = await withRetry(() => fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${config.llmApiKey}`,
     },
     body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`OpenAI API error ${res.status}: ${errText}`);
-  }
+  }).then(async r => {
+    if (!r.ok) {
+      const errText = await r.text();
+      throw new Error(`OpenAI API error ${r.status}: ${errText}`);
+    }
+    return r;
+  }));
 
   const data = await res.json();
   if (!data.choices || !data.choices.length) {

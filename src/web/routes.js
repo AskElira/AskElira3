@@ -1,5 +1,6 @@
 const express = require('express');
 const path = require('path');
+const rateLimit = require('express-rate-limit');
 const { listGoals, getGoal, listFloors, getFloor, getLogs, addLog } = require('../db');
 const { hermesChat, hermesRoute } = require('../hermes/index');
 const { runPlanner } = require('../pipeline/planner');
@@ -16,6 +17,15 @@ router.use('/api', (req, res, next) => {
   const auth = req.headers['authorization'] || '';
   if (auth === `Bearer ${config.apiToken}`) return next();
   res.status(401).json({ error: 'Unauthorized' });
+});
+
+// ── Rate limiting ──
+const goalCreationLimit = rateLimit({
+  windowMs: 60_000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many goals created. Try again in a minute.' },
 });
 
 // ── Goals ──
@@ -37,7 +47,7 @@ router.get('/api/goals', (req, res) => {
 });
 
 // Create a goal, plan, and start pipeline async
-router.post('/api/goals', async (req, res) => {
+router.post('/api/goals', goalCreationLimit, async (req, res) => {
   try {
     const { text } = req.body;
     if (!text || !text.trim()) {
@@ -73,6 +83,80 @@ router.get('/api/goals/:id', (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// SSE: stream live logs + status changes for a goal
+router.get('/api/goals/:id/stream', (req, res) => {
+  const goal = getGoal(req.params.id);
+  if (!goal) {
+    res.status(404).json({ error: 'Goal not found' });
+    return;
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const TERMINAL_STATUSES = new Set(['goal_met', 'partial', 'blocked']);
+  const POLL_MS = 1500;
+
+  // Track what we've already sent
+  let lastLogId = 0;
+  let lastFloorStatuses = {};
+  let lastGoalStatus = goal.status;
+
+  // Seed last log ID without sending historical logs
+  try {
+    const existing = getLogs({ goalId: goal.id, limit: 1 });
+    if (existing.length > 0) lastLogId = existing[0].id;
+  } catch (_) {}
+
+  function sendEvent(event, data) {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  }
+
+  function poll() {
+    try {
+      const currentGoal = getGoal(req.params.id);
+      if (!currentGoal) return;
+
+      // New logs
+      const newLogs = getLogs({ goalId: req.params.id, limit: 50 })
+        .filter(l => l.id > lastLogId)
+        .reverse(); // oldest first
+      for (const log of newLogs) {
+        sendEvent('log', { id: log.id, agent: log.agent, message: log.message, floorId: log.floor_id, createdAt: log.created_at });
+        lastLogId = Math.max(lastLogId, log.id);
+      }
+
+      // Floor status changes
+      const floors = listFloors(req.params.id);
+      for (const floor of floors) {
+        const prev = lastFloorStatuses[floor.id];
+        if (prev !== floor.status) {
+          sendEvent('status', { type: 'floor', floorNumber: floor.floor_number, floorName: floor.name, status: floor.status, step: floor.current_step });
+          lastFloorStatuses[floor.id] = floor.status;
+        }
+      }
+
+      // Goal status change
+      if (currentGoal.status !== lastGoalStatus) {
+        sendEvent('status', { type: 'goal', status: currentGoal.status });
+        lastGoalStatus = currentGoal.status;
+      }
+
+      // Terminal — close stream
+      if (TERMINAL_STATUSES.has(currentGoal.status)) {
+        sendEvent('done', { goalStatus: currentGoal.status });
+        clearInterval(timer);
+        res.end();
+      }
+    } catch (_) {}
+  }
+
+  const timer = setInterval(poll, POLL_MS);
+  req.on('close', () => clearInterval(timer));
 });
 
 // Trigger Steven to fix a blocked floor for a goal
