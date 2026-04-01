@@ -31,18 +31,11 @@ Format: {"valid": true/false, "issues": ["issue 1"], "securityFlags": ["flag 1"]
 
 /**
  * Parse JSON from LLM response with fallback.
+ * Uses the shared parseJSON which tries all candidates longest-first.
  */
+const { parseJSON: parseVexJSON_shared } = require('../hermes/index');
 function parseVexJSON(text, fallback) {
-  try {
-    const cleaned = text.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
-    return JSON.parse(cleaned);
-  } catch (e) {
-    const match = text.match(/\{[\s\S]*\}/);
-    if (match) {
-      try { return JSON.parse(match[0]); } catch (e2) { /* fall through */ }
-    }
-    return fallback;
-  }
+  return parseVexJSON_shared(text, fallback);
 }
 
 /**

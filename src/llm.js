@@ -99,13 +99,17 @@ async function withRetry(fn, retries = 3, baseDelay = 1000) {
 }
 
 function stripThinking(text) {
-  return text
+  let out = text
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
     .replace(/TOOL_CALL[\s\S]*?\[\/TOOLCALL\]/gi, '')
     .replace(/\[TOOL_CALL\][\s\S]*?\[\/TOOL_CALL\]/gi, '')
     .replace(/<minimax:toolcall>[\s\S]*?<\/minimax:toolcall>/gi, '')
     .replace(/```tool[\s\S]*?```/gi, '')
     .trim();
+  // Unwrap <answer>...</answer> — some models wrap final output in this tag
+  const answerMatch = out.match(/<answer>([\s\S]*?)<\/answer>/i);
+  if (answerMatch) out = answerMatch[1].trim();
+  return out;
 }
 
 async function chat(messages, { model, system, maxTokens = 4096, isBuildingTask: building = false, goalId, floorId, agent } = {}) {

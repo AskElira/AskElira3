@@ -22,23 +22,48 @@ function getSoul() {
 
 /**
  * Parse JSON from LLM response, handling markdown code blocks and fallbacks.
+ * Tries all candidate array/object substrings, longest first.
  */
 function parseJSON(text, fallback) {
-  try {
-    const cleaned = text.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
-    return JSON.parse(cleaned);
-  } catch (e) {
-    // Try to extract JSON object or array
-    const objMatch = text.match(/\{[\s\S]*\}/);
-    const arrMatch = text.match(/\[[\s\S]*\]/);
-    if (arrMatch) {
-      try { return JSON.parse(arrMatch[0]); } catch (e2) { /* fall through */ }
+  // Strip markdown fences first
+  const cleaned = text.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
+  try { return JSON.parse(cleaned); } catch (_) {}
+
+  // Collect all [...] substrings and try each, longest first
+  const arrCandidates = [];
+  for (let i = 0; i < cleaned.length; i++) {
+    if (cleaned[i] === '[') {
+      for (let j = cleaned.length; j > i; j--) {
+        if (cleaned[j - 1] === ']') {
+          arrCandidates.push(cleaned.slice(i, j));
+          break;
+        }
+      }
     }
-    if (objMatch) {
-      try { return JSON.parse(objMatch[0]); } catch (e2) { /* fall through */ }
-    }
-    return fallback;
   }
+  arrCandidates.sort((a, b) => b.length - a.length);
+  for (const candidate of arrCandidates) {
+    try { return JSON.parse(candidate); } catch (_) {}
+  }
+
+  // Collect all {...} substrings and try each, longest first
+  const objCandidates = [];
+  for (let i = 0; i < cleaned.length; i++) {
+    if (cleaned[i] === '{') {
+      for (let j = cleaned.length; j > i; j--) {
+        if (cleaned[j - 1] === '}') {
+          objCandidates.push(cleaned.slice(i, j));
+          break;
+        }
+      }
+    }
+  }
+  objCandidates.sort((a, b) => b.length - a.length);
+  for (const candidate of objCandidates) {
+    try { return JSON.parse(candidate); } catch (_) {}
+  }
+
+  return fallback;
 }
 
 /**
@@ -77,9 +102,27 @@ async function hermesPlan(goalText, { goalId } = {}) {
     agent: 'Elira',
   });
 
-  const floors = parseJSON(reply, null);
+  let floors = parseJSON(reply, null);
+
+  // Retry once with a more direct prompt if parse failed
   if (!Array.isArray(floors) || floors.length === 0) {
-    console.error('[Hermes/Elira] Failed to parse plan:', reply.substring(0, 300));
+    console.warn('[Hermes/Elira] Plan parse failed, retrying with stricter prompt. Raw:', reply.substring(0, 200));
+    const retryMessages = [{
+      role: 'user',
+      content: `Return ONLY a JSON array — no text before or after, no markdown, no explanation.\n\nGoal: ${wrapInput(goalText)}\n\nJSON array of 3-7 floors:\n[{"name":"...","description":"...","successCondition":"...","deliverable":"...","dependsOn":[]}]`
+    }];
+    const retryReply = await chat(retryMessages, {
+      model: config.eliraModel,
+      system: 'You output only valid JSON. Nothing else.',
+      isBuildingTask: true,
+      goalId,
+      agent: 'Elira',
+    });
+    floors = parseJSON(retryReply, null);
+  }
+
+  if (!Array.isArray(floors) || floors.length === 0) {
+    console.error('[Hermes/Elira] Failed to parse plan after retry:', reply.substring(0, 300));
     throw new Error('Hermes/Elira returned invalid plan JSON');
   }
 

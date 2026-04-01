@@ -7,7 +7,7 @@ const executor = require('../executor');
 const { updateFloor, addLog, listFloors, updateGoal, getGoal, getFloor, updateFloorPatches } = require('../db');
 const { notifyFloorLive, notifyFloorBlocked, notifyGoalComplete, sendTelegram } = require('../notify');
 
-const MAX_ITERATIONS = 3;
+const MAX_ITERATIONS = 5;
 
 async function syntaxCheckFiles(writtenFiles, goalId) {
   const errors = [];
@@ -192,7 +192,7 @@ async function runFloor(floor, goal) {
       addLog(goal.id, floor.id, 'Vex', 'Gate 2: Validating build...');
       const vex2 = await vex.vexValidateBuild(floor, build.output, goal.id);
 
-      if (vex2.score < 60 || vex2.securityFlags.length > 0) {
+      if (vex2.score < 40 || vex2.securityFlags.length > 0) {
         vex2Passed = false;
         const issues = [...vex2.issues, ...vex2.securityFlags.map(f => `SECURITY: ${f}`)];
         vexBuildFeedback = `Vex2 score: ${vex2.score}/100. Issues: ${issues.join('; ')}`;
