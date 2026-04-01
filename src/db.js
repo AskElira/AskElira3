@@ -72,7 +72,7 @@ function safeAddColumn(table, column, type, defaultVal) {
 }
 
 const ALLOWED_GOAL_FIELDS = new Set(['text','status','building_plan','llm_calls','tokens_est']);
-const ALLOWED_FLOOR_FIELDS = new Set(['status','research','result','iteration','vex1_score','vex2_score','fix_patches','current_step']);
+const ALLOWED_FLOOR_FIELDS = new Set(['status','research','result','iteration','vex1_score','vex2_score','fix_patches','current_step','depends_on']);
 
 safeAddColumn('floors', 'success_condition', 'TEXT', "''");
 safeAddColumn('floors', 'deliverable', 'TEXT', "''");
@@ -82,6 +82,7 @@ safeAddColumn('floors', 'fix_patches', 'TEXT', 'NULL');
 safeAddColumn('goals', 'llm_calls', 'INTEGER', '0');
 safeAddColumn('goals', 'tokens_est', 'INTEGER', '0');
 safeAddColumn('floors', 'current_step', 'TEXT', "''");
+safeAddColumn('floors', 'depends_on', 'TEXT', "'[]'");
 
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_floors_goal_id ON floors(goal_id);
@@ -122,11 +123,11 @@ function listGoals() {
 
 // ── Floors ──
 
-function createFloor(goalId, floorNumber, name, description, successCondition, deliverable) {
+function createFloor(goalId, floorNumber, name, description, successCondition, deliverable, dependsOn = []) {
   const id = crypto.randomUUID();
   db.prepare(
-    'INSERT INTO floors (id, goal_id, floor_number, name, description, success_condition, deliverable) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, goalId, floorNumber, name, description || '', successCondition || '', deliverable || '');
+    'INSERT INTO floors (id, goal_id, floor_number, name, description, success_condition, deliverable, depends_on) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, goalId, floorNumber, name, description || '', successCondition || '', deliverable || '', JSON.stringify(dependsOn));
   return getFloor(id);
 }
 

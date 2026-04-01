@@ -19,7 +19,7 @@ async function runPlanner(goal) {
       const floors = [];
       for (let i = 0; i < floorPlans.length; i++) {
         const fp = floorPlans[i];
-        const floor = createFloor(goal.id, i + 1, fp.name, fp.description, fp.successCondition, fp.deliverable);
+        const floor = createFloor(goal.id, i + 1, fp.name, fp.description, fp.successCondition, fp.deliverable, fp.dependsOn || []);
         floors.push(floor);
       }
       return floors;

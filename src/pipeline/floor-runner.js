@@ -9,6 +9,21 @@ const { notifyFloorLive, notifyFloorBlocked, notifyGoalComplete, sendTelegram } 
 
 const MAX_ITERATIONS = 3;
 
+async function syntaxCheckFiles(writtenFiles, goalId) {
+  const errors = [];
+  for (const filename of writtenFiles) {
+    const filePath = workspace.getWorkspacePath(goalId) + '/' + filename;
+    if (filename.endsWith('.js') || filename.endsWith('.mjs')) {
+      const result = await executor.run(`node --check ${filePath}`);
+      if (!result.success) errors.push(`${filename}: ${result.stderr}`);
+    } else if (filename.endsWith('.py')) {
+      const result = await executor.run(`python3 -m py_compile ${filePath}`);
+      if (!result.success) errors.push(`${filename}: ${result.stderr}`);
+    }
+  }
+  return errors;
+}
+
 const HIGH_RISK_KEYWORDS = ['database', 'migration', 'deploy', 'infrastructure', 'credential', 'secret', 'production', 'drop table', 'delete all'];
 
 function isHighRisk(floor) {
@@ -159,6 +174,17 @@ async function runFloor(floor, goal) {
       addLog(goal.id, floor.id, 'Elira', `Install step warning: ${execErr.message}`);
     }
 
+    // ── Step 3c: Syntax check David's output ──
+    if (build.files && build.files.length > 0) {
+      const syntaxErrors = await syntaxCheckFiles(build.files, goal.id);
+      if (syntaxErrors.length > 0) {
+        addLog(goal.id, floor.id, 'David', `Syntax errors: ${syntaxErrors.join('; ')}`);
+        vexBuildFeedback = `Syntax errors: ${syntaxErrors.join('; ')}`;
+        feedback = `Syntax errors found: ${syntaxErrors.join('; ')}`;
+        continue;
+      }
+    }
+
     // ── Step 4: Vex Gate 2 validates build ──
     updateFloor(floor.id, { current_step: 'vex2' });
     let vex2Passed = true;
@@ -254,7 +280,32 @@ async function runFloor(floor, goal) {
 }
 
 /**
- * Run the full pipeline for all floors of a goal sequentially.
+ * Build execution waves from floors using topological sort on depends_on.
+ * Returns array of waves, each wave is an array of floors that can run in parallel.
+ */
+function buildExecutionWaves(floors) {
+  const completed = new Set();
+  const waves = [];
+  let remaining = [...floors];
+  while (remaining.length > 0) {
+    const wave = remaining.filter(f => {
+      const deps = JSON.parse(f.depends_on || '[]');
+      return deps.every(n => completed.has(n));
+    });
+    if (wave.length === 0) {
+      // Circular dependency or unresolvable — run remaining sequentially as one wave
+      waves.push(remaining);
+      break;
+    }
+    waves.push(wave);
+    wave.forEach(f => completed.add(f.floor_number));
+    remaining = remaining.filter(f => !wave.includes(f));
+  }
+  return waves;
+}
+
+/**
+ * Run the full pipeline for all floors of a goal using dependency-aware parallel waves.
  * @param {Object} goal
  * @param {Array} floors
  */
@@ -263,12 +314,21 @@ async function runPipeline(goal, floors) {
   addLog(goal.id, null, 'Hermes', `Pipeline started: ${floors.length} floors`);
 
   let allLive = true;
+  const waves = buildExecutionWaves(floors);
+  console.log(`[Pipeline] Execution waves: ${waves.map((w, i) => `wave${i+1}=[${w.map(f=>f.floor_number).join(',')}]`).join(' ')}`);
 
-  for (const floor of floors) {
-    const result = await runFloor(floor, goal);
-    if (result.status !== 'live') {
-      allLive = false;
-      console.log(`[Pipeline] Floor ${floor.floor_number} not live (${result.status}), continuing...`);
+  for (const wave of waves) {
+    const results = await Promise.allSettled(wave.map(f => runFloor(f, goal)));
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      const f = wave[i];
+      if (r.status === 'rejected') {
+        allLive = false;
+        console.log(`[Pipeline] Floor ${f.floor_number} threw error: ${r.reason?.message}`);
+      } else if (r.value?.status !== 'live') {
+        allLive = false;
+        console.log(`[Pipeline] Floor ${f.floor_number} not live (${r.value?.status}), continuing...`);
+      }
     }
   }
 

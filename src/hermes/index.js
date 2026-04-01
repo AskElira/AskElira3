@@ -67,7 +67,7 @@ async function hermesPlan(goalText, { goalId } = {}) {
   console.log('[Hermes/Elira] Planning goal:', goalText.substring(0, 80));
   const messages = [{
     role: 'user',
-    content: `I need you to design a building plan for this goal:\n\n${wrapInput(goalText)}\n\nDecompose it into 3-7 floors. Each floor must have a name, description, successCondition, and deliverable.\n\nCRITICAL: Return ONLY a valid JSON array. No markdown, no explanation, just the JSON.\nFormat: [{"name":"Floor Name","description":"What this floor does","successCondition":"How to verify it is done","deliverable":"What concrete files/artifacts David should produce"}]`
+    content: `I need you to design a building plan for this goal:\n\n${wrapInput(goalText)}\n\nDecompose it into 3-7 floors. Each floor must have a name, description, successCondition, deliverable, and dependsOn.\n\nCRITICAL: Return ONLY a valid JSON array. No markdown, no explanation, just the JSON.\nFormat: [{"name":"Floor Name","description":"What this floor does","successCondition":"How to verify it is done","deliverable":"What concrete files/artifacts David should produce","dependsOn":[]}]\n\ndependsOn is an array of floor numbers (1-indexed) this floor depends on. Use [] if none. Example: Floor 3 builds on Floor 1's output → "dependsOn":[1]`
   }];
   const reply = await chat(messages, {
     model: config.eliraModel,
