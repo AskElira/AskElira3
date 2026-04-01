@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AskElira 3</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <h1>AskElira <span class="h-elira">3</span></h1>
+        <span class="hermes-indicator elira-mode" id="hermes-mode">Hermes</span>
+      </div>
+      <div class="status-pills">
+        <div class="pill">
+          <span class="dot" id="llm-dot"></span>
+          <span id="llm-label">LLM</span>
+        </div>
+        <div class="pill">
+          <span class="dot" id="tg-dot"></span>
+          <span>Telegram</span>
+        </div>
+        <div class="pill">
+          <span class="dot" id="search-dot"></span>
+          <span id="search-label">Search</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <h2>Goals</h2>
+      <div class="goal-list-items" id="goal-list"></div>
+      <div class="new-goal-btn" id="new-goal-btn">+ New Goal</div>
+
+      <!-- User Model Panel -->
+      <div class="user-model-panel" id="user-model-panel">
+        <h2>User Model</h2>
+        <div id="user-model-content">
+          <div class="um-row"><span class="um-label">Name</span><span class="um-value" id="um-name">--</span></div>
+          <div class="um-row"><span class="um-label">Interests</span><div class="um-tags" id="um-interests"></div></div>
+          <div class="um-row"><span class="um-label">Tech Stack</span><div class="um-tags" id="um-tech"></div></div>
+          <div class="um-row"><span class="um-label">Goals</span><div class="um-tags" id="um-goals"></div></div>
+          <div class="um-row"><span class="um-label">Suggestions</span><div id="um-suggestions"></div></div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main">
+      <!-- Input -->
+      <div class="input-area" id="input-area">
+        <textarea id="goal-input" placeholder="Describe what you want to build..." rows="2"></textarea>
+        <button class="btn" id="build-btn">Build</button>
+      </div>
+
+      <!-- Tabs -->
+      <div class="tabs">
+        <button class="tab active" data-tab="building">Building</button>
+        <button class="tab" data-tab="workspace">Workspace</button>
+        <button class="tab" data-tab="chat">Chat</button>
+      </div>
+
+      <!-- Tab: Building -->
+      <div id="tab-building" class="tab-content">
+        <div id="goal-detail"></div>
+      </div>
+
+      <!-- Tab: Workspace -->
+      <div id="tab-workspace" class="tab-content" style="display:none">
+        <div id="workspace-content"></div>
+      </div>
+
+      <!-- Tab: Chat -->
+      <div id="tab-chat" class="tab-content" style="display:none">
+        <div class="chat-area">
+          <div class="chat-messages" id="chat-messages"></div>
+          <div class="chat-input">
+            <input type="text" id="chat-input" placeholder="Chat with Hermes..." autocomplete="off">
+            <button class="btn" id="chat-send">Send</button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Log Stream -->
+    <div class="log-stream" id="log-stream">
+      <div class="log-stream-header">
+        <h3>Live Logs</h3>
+      </div>
+      <div id="log-list"></div>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

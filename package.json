@@ -1,0 +1,25 @@
+{
+  "name": "askelira3",
+  "version": "3.0.0",
+  "description": "AskElira 3 -- Hermes-powered building automation with Elira",
+  "main": "src/web/server.js",
+  "bin": {
+    "askelira3": "bin/askelira3.js"
+  },
+  "scripts": {
+    "start": "node src/web/server.js",
+    "dev": "node --watch src/web/server.js",
+    "cli": "node bin/askelira3.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.4.3",
+    "express": "^4.18.2",
+    "openai": "^4.28.0",
+    "dotenv": "^16.4.5",
+    "node-fetch": "^3.3.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}
