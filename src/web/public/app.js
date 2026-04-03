@@ -707,9 +707,10 @@ function renderChat(tgMsgs) {
         '<h3>Hey, I\'m Elira</h3>' +
         '<p>Your AI build team. Ask me anything or tell me what to build.</p>' +
         '<div class="chat-quick-actions">' +
-          '<button class="chat-quick-action" data-text="Build a REST API for a todo app">Build a REST API for a todo app</button>' +
-          '<button class="chat-quick-action" data-text="What can you do?">What can you do?</button>' +
-          '<button class="chat-quick-action" data-text="Show me the status of my builds">Show me build status</button>' +
+          '<button class="chat-quick-action" data-text="Build a REST API for a todo app">Build something new</button>' +
+          '<button class="chat-quick-action" data-text="fix">Fix blocked floors</button>' +
+          '<button class="chat-quick-action" data-text="continue">Continue building</button>' +
+          '<button class="chat-quick-action" data-text="status">Show build status</button>' +
         '</div>' +
       '</div>';
     // Bind quick actions
@@ -735,7 +736,9 @@ async function sendChat() {
   input.value = '';
   input.style.height = 'auto';
 
-  // Detect build commands — route to goal creation
+  var lower = text.toLowerCase();
+
+  // ── Action: Build ──
   var buildMatch = text.match(/^(build|create|make|start)\s+(.{3,})/i);
   if (buildMatch) {
     chatHistory.push({ role: 'user', content: text });
@@ -754,6 +757,105 @@ async function sendChat() {
     return;
   }
 
+  // ── Action: Fix with Steven ──
+  if (/\bfix\b|fix.*steven|steven.*fix|repair|unblock/i.test(lower)) {
+    chatHistory.push({ role: 'user', content: text });
+    renderChat([]);
+    var fixGoalId = selectedGoalId;
+    if (!fixGoalId) {
+      // Try to find a goal with blocked floors
+      try {
+        var allGoals = await api('/api/goals');
+        var goalWithBlocked = allGoals.find(function(g) { return g.floorsBlocked > 0; });
+        if (goalWithBlocked) fixGoalId = goalWithBlocked.id;
+      } catch (_) {}
+    }
+    if (fixGoalId) {
+      try {
+        var fixResult = await api('/api/goals/' + fixGoalId + '/fix', { method: 'POST', body: {} });
+        chatHistory.push({ role: 'assistant', content: 'Steven is on it — fixing "' + (fixResult.floorName || 'blocked floor') + '".\n\nWatch the Building tab for progress.' });
+        showToast('Steven fixing: ' + (fixResult.floorName || 'blocked floor'), 'info');
+        fetchGoals();
+      } catch (err) {
+        chatHistory.push({ role: 'assistant', content: 'Fix failed: ' + err.message + '\n\nThere might not be any blocked floors right now.' });
+      }
+    } else {
+      chatHistory.push({ role: 'assistant', content: 'No blocked floors found. Everything looks okay!' });
+    }
+    renderChat([]);
+    return;
+  }
+
+  // ── Action: Continue / Resume build ──
+  if (/^(continue|resume|keep building|retry|try again|run again)/i.test(lower)) {
+    chatHistory.push({ role: 'user', content: text });
+    renderChat([]);
+    var resumeGoalId = selectedGoalId;
+    if (!resumeGoalId) {
+      try {
+        var goals = await api('/api/goals');
+        var incomplete = goals.find(function(g) { return g.status !== 'goal_met' && g.status !== 'completed'; });
+        if (incomplete) resumeGoalId = incomplete.id;
+      } catch (_) {}
+    }
+    if (resumeGoalId) {
+      try {
+        var runResult = await api('/api/goals/' + resumeGoalId + '/run', { method: 'POST', body: {} });
+        selectedGoalId = resumeGoalId;
+        chatHistory.push({ role: 'assistant', content: 'Resuming pipeline for this goal. ' + (runResult.floors || 0) + ' floors queued.\n\nSwitch to the Building tab to watch.' });
+        showToast('Pipeline resumed', 'success');
+        fetchGoals();
+        switchTab('building');
+      } catch (err) {
+        chatHistory.push({ role: 'assistant', content: 'Resume failed: ' + err.message });
+      }
+    } else {
+      chatHistory.push({ role: 'assistant', content: 'No incomplete goals to resume. Tell me what to build!' });
+    }
+    renderChat([]);
+    return;
+  }
+
+  // ── Action: Status ──
+  if (/^(status|what.s running|show.*goals|my builds)/i.test(lower)) {
+    chatHistory.push({ role: 'user', content: text });
+    renderChat([]);
+    try {
+      var statusGoals = await api('/api/goals');
+      if (!statusGoals.length) {
+        chatHistory.push({ role: 'assistant', content: 'No goals yet. Tell me what to build!' });
+      } else {
+        var lines = statusGoals.slice(0, 5).map(function(g) {
+          var icon = g.status === 'goal_met' ? '✅' : g.status === 'blocked' ? '🔴' : g.status === 'building' ? '🔨' : '⏳';
+          return icon + ' ' + g.text.substring(0, 50) + '\n   ' + g.floorsLive + '/' + g.floorCount + ' live' + (g.floorsBlocked ? ', ' + g.floorsBlocked + ' blocked' : '');
+        });
+        chatHistory.push({ role: 'assistant', content: 'Goals:\n\n' + lines.join('\n\n') });
+      }
+    } catch (err) {
+      chatHistory.push({ role: 'assistant', content: 'Error fetching status: ' + err.message });
+    }
+    renderChat([]);
+    return;
+  }
+
+  // ── Action: Delete ──
+  if (/^(delete|remove|trash|nuke)\s/i.test(lower) && selectedGoalId) {
+    chatHistory.push({ role: 'user', content: text });
+    renderChat([]);
+    try {
+      var delGoal = await api('/api/goals/' + selectedGoalId, { method: 'DELETE' });
+      chatHistory.push({ role: 'assistant', content: 'Deleted "' + (delGoal.text || 'goal').substring(0, 50) + '" — removed goal, floors, logs, and workspace.' });
+      selectedGoalId = null;
+      fetchGoals();
+      switchTab('overview');
+    } catch (err) {
+      chatHistory.push({ role: 'assistant', content: 'Delete failed: ' + err.message });
+    }
+    renderChat([]);
+    return;
+  }
+
+  // ── Default: Chat with Hermes ──
   chatHistory.push({ role: 'user', content: text });
   renderChat([]);
 
