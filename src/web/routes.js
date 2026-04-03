@@ -419,6 +419,24 @@ router.get('/api/stats/llm', (req, res) => {
   }
 });
 
+router.get('/api/stats/metrics', (req, res) => {
+  try {
+    const { getMetricsSummary } = require('../db');
+    res.json(getMetricsSummary());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/stats/circuits', (req, res) => {
+  try {
+    const { getAllBreakers } = require('../circuit-breaker');
+    res.json(getAllBreakers());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Status ──
 
 router.get('/api/status', (req, res) => {

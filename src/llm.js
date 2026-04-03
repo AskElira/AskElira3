@@ -1,6 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 const { config } = require('./config');
+const { createBreaker, CircuitOpenError } = require('./circuit-breaker');
+
+const ollamaBreaker = createBreaker('ollama', { cooldownMs: 120000 });
 
 // ── Usage tracking ──────────────────────────────────────────────────────────
 const USAGE_FILE = path.resolve(__dirname, '..', 'data', 'usage.json');
@@ -58,7 +61,7 @@ async function ollamaChat(messages, { model = 'qwen2.5:7b', system, maxTokens = 
   if (system) allMessages.push({ role: 'system', content: system });
   allMessages.push(...messages);
 
-  const res = await fetch('http://localhost:11434/api/chat', {
+  const res = await fetchWithTimeout('http://localhost:11434/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -67,7 +70,7 @@ async function ollamaChat(messages, { model = 'qwen2.5:7b', system, maxTokens = 
       stream: false,
       options: { num_predict: maxTokens },
     }),
-  });
+  }, OLLAMA_TIMEOUT_MS);
   if (!res.ok) throw new Error(`Ollama error: ${res.status}`);
   const data = await res.json();
   return stripThinking(data.message?.content || '');
@@ -112,6 +115,23 @@ function stripThinking(text) {
   return out;
 }
 
+// ── Timeout-protected fetch ─────────────────────────────────────────────────
+const LLM_TIMEOUT_MS = parseInt(process.env.LLM_TIMEOUT_MS || '60000', 10);   // 60s for cloud LLM
+const OLLAMA_TIMEOUT_MS = parseInt(process.env.OLLAMA_TIMEOUT_MS || '30000', 10); // 30s for local
+
+function fetchWithTimeout(url, opts, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...opts, signal: controller.signal })
+    .finally(() => clearTimeout(timer))
+    .catch(err => {
+      if (err.name === 'AbortError') {
+        throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s: ${url}`);
+      }
+      throw err;
+    });
+}
+
 async function chat(messages, { model, system, maxTokens = 4096, isBuildingTask: building = false, goalId, floorId, agent } = {}) {
   if (!config.llmApiKey) {
     throw new Error('LLM_API_KEY not configured');
@@ -121,9 +141,10 @@ async function chat(messages, { model, system, maxTokens = 4096, isBuildingTask:
   if (!building && isOverThreshold()) {
     try {
       console.log('[LLM] Over 90% budget — routing chat to local Ollama');
-      return await ollamaChat(messages, { system, maxTokens });
+      return await ollamaBreaker.call(() => ollamaChat(messages, { system, maxTokens }));
     } catch (err) {
-      console.warn('[LLM] Ollama fallback failed, using MiniMax:', err.message);
+      if (err instanceof CircuitOpenError) console.warn('[LLM] Ollama circuit open — using cloud LLM');
+      else console.warn('[LLM] Ollama fallback failed, using cloud LLM:', err.message);
     }
   }
 
@@ -150,7 +171,7 @@ async function anthropicChat(messages, { model, system, maxTokens, goalId, floor
   };
   if (system) body.system = system;
 
-  const res = await withRetry(() => fetch(url, {
+  const res = await withRetry(() => fetchWithTimeout(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -158,7 +179,7 @@ async function anthropicChat(messages, { model, system, maxTokens, goalId, floor
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify(body),
-  }).then(async r => {
+  }, LLM_TIMEOUT_MS).then(async r => {
     if (!r.ok) {
       const errText = await r.text();
       throw new Error(`Anthropic API error ${r.status}: ${errText}`);
@@ -201,14 +222,14 @@ async function openaiChat(messages, { model, system, maxTokens, goalId, floorId,
     messages: allMessages,
   };
 
-  const res = await withRetry(() => fetch(url, {
+  const res = await withRetry(() => fetchWithTimeout(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${config.llmApiKey}`,
     },
     body: JSON.stringify(body),
-  }).then(async r => {
+  }, LLM_TIMEOUT_MS).then(async r => {
     if (!r.ok) {
       const errText = await r.text();
       throw new Error(`OpenAI API error ${r.status}: ${errText}`);

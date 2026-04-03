@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { chat } = require('../llm');
 const { config } = require('../config');
+const { validateSchema, APPROVE_SCHEMA, FIX_SCHEMA } = require('../schema-validator');
 
 const SOUL = fs.readFileSync(path.join(__dirname, 'SOUL.md'), 'utf8');
 
@@ -157,12 +158,11 @@ async function hermesApprove(floor, davidOutput, { goalId } = {}) {
     agent: 'Elira',
   });
 
-  const result = parseJSON(reply, { approved: false, feedback: 'Failed to parse approval response', fixes: [] });
+  const parsed = parseJSON(reply, null);
+  const result = validateSchema(parsed, APPROVE_SCHEMA);
 
-  // Normalize
-  result.approved = !!result.approved;
-  result.feedback = result.feedback || '';
-  result.fixes = Array.isArray(result.fixes) ? result.fixes : [];
+  // Normalize optional fields
+  result.fixes = result.fixes || [];
 
   const status = result.approved ? 'APPROVED' : 'REJECTED';
   console.log(`[Hermes/Elira] ${status}: ${floor.name}`);
@@ -189,20 +189,13 @@ async function hermesFix(floor, error, previousOutput, { goalId } = {}) {
     agent: 'Steven',
   });
 
-  const result = parseJSON(reply, {
-    diagnosis: 'Could not parse fix response',
-    rootCause: 'Unknown',
-    fixPlan: [],
-    patches: [],
-    verificationSteps: [],
-  });
+  const parsed = parseJSON(reply, null);
+  const result = validateSchema(parsed, FIX_SCHEMA);
 
-  // Normalize
-  result.diagnosis = result.diagnosis || 'Unknown';
+  // Normalize optional fields
   result.rootCause = result.rootCause || 'Unknown';
-  result.fixPlan = Array.isArray(result.fixPlan) ? result.fixPlan : [];
-  result.patches = Array.isArray(result.patches) ? result.patches : [];
-  result.verificationSteps = Array.isArray(result.verificationSteps) ? result.verificationSteps : [];
+  result.fixPlan = result.fixPlan || [];
+  result.verificationSteps = result.verificationSteps || [];
 
   console.log(`[Hermes/Steven] Fix plan: ${result.fixPlan.length} steps, ${result.patches.length} patches`);
   return result;

@@ -3,6 +3,7 @@ const { addLog } = require('../db');
 const workspace = require('../pipeline/workspace');
 const { parseJSON } = require('../hermes/index');
 const { wrapInput } = require('../hermes/utils');
+const { validateSchema, DAVID_BUILD_SCHEMA } = require('../schema-validator');
 
 const DAVID_SYSTEM = `You are David, the builder agent for AskElira 3.
 
@@ -82,20 +83,16 @@ ${wrapInput(vexFeedback)}`;
   // Parse the response
   let parsed = parseJSON(reply, null);
 
-  // Handle various response formats
+  // Handle various response formats — try markdown extraction if JSON parse failed
   if (!parsed || !parsed.files) {
-    // Try to extract files from markdown code blocks as a fallback
     const filesMap = extractFilesFromMarkdown(reply);
     if (Object.keys(filesMap).length > 0) {
       parsed = { summary: 'Built from markdown output', files: filesMap };
-    } else {
-      // Last resort: treat entire output as a single file
-      parsed = {
-        summary: 'Raw output',
-        files: { 'output.txt': reply }
-      };
     }
   }
+
+  // Strict validation — must have files object with at least one entry
+  validateSchema(parsed, DAVID_BUILD_SCHEMA);
 
   // Write files to workspace
   const writtenFiles = [];

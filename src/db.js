@@ -63,6 +63,21 @@ db.exec(`
     source  TEXT NOT NULL DEFAULT 'telegram',
     created_at INTEGER DEFAULT (unixepoch())
   );
+
+  CREATE TABLE IF NOT EXISTS metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    goal_id TEXT,
+    floor_id TEXT,
+    agent TEXT NOT NULL,
+    event TEXT NOT NULL,
+    duration_ms INTEGER,
+    success INTEGER,
+    metadata TEXT,
+    created_at INTEGER DEFAULT (unixepoch())
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_metrics_agent ON metrics(agent);
+  CREATE INDEX IF NOT EXISTS idx_metrics_event ON metrics(event);
 `);
 
 // Migration: add columns to existing tables if they are missing
@@ -254,6 +269,44 @@ function incrementGoalLlmUsage(goalId, tokens) {
   db.prepare(`UPDATE goals SET llm_calls = llm_calls + 1, tokens_est = tokens_est + ? WHERE id = ?`).run(tokens||0, goalId);
 }
 
+// ── Metrics ──
+
+function recordMetric({ goalId, floorId, agent, event, durationMs, success, metadata }) {
+  db.prepare(
+    `INSERT INTO metrics (goal_id, floor_id, agent, event, duration_ms, success, metadata)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(goalId || null, floorId || null, agent, event, durationMs || 0, success ? 1 : 0, metadata || null);
+}
+
+function getMetricsSummary() {
+  const byAgent = db.prepare(
+    `SELECT agent, event,
+            COUNT(*) as total,
+            SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successes,
+            ROUND(AVG(duration_ms)) as avg_duration_ms,
+            MIN(duration_ms) as min_duration_ms,
+            MAX(duration_ms) as max_duration_ms
+     FROM metrics GROUP BY agent, event ORDER BY agent, event`
+  ).all();
+
+  const floorStats = db.prepare(
+    `SELECT
+       COUNT(*) as total_floors,
+       SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as live_floors,
+       ROUND(AVG(duration_ms)) as avg_floor_ms,
+       MIN(duration_ms) as min_floor_ms,
+       MAX(duration_ms) as max_floor_ms
+     FROM metrics WHERE event = 'floor_complete'`
+  ).get();
+
+  const recentFailures = db.prepare(
+    `SELECT agent, event, metadata, created_at
+     FROM metrics WHERE success = 0 ORDER BY created_at DESC LIMIT 20`
+  ).all();
+
+  return { byAgent, floorStats, recentFailures };
+}
+
 // ── Telegram Messages ──
 
 function addTelegramMessage(role, content) {
@@ -300,6 +353,7 @@ module.exports = {
   updateFloorVex, updateFloorPatches,
   addLog, getLogs,
   logLlmCall, getLlmStats, incrementGoalLlmUsage,
+  recordMetric, getMetricsSummary,
   addTelegramMessage, getTelegramMessages, getRecentTelegramMessages,
   addWebChatMessage, getWebChatMessages,
 };

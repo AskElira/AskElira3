@@ -21,6 +21,7 @@ const { config } = require('./config');
 const INTERVAL_MS = parseInt(process.env.HEARTBEAT_INTERVAL_MS || String(5 * 60 * 1000), 10);
 const STALL_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
 const SUMMARY_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const MAX_FIX_ATTEMPTS = parseInt(process.env.MAX_FIX_ATTEMPTS || '5', 10);
 
 const STATE_FILE = path.resolve(__dirname, '..', 'data', 'heartbeat-state.json');
 
@@ -96,30 +97,47 @@ async function heartbeatCycle() {
         state[stateKey].lastChecked = now;
         state[stateKey].floorName = floor.name;
 
-        // ── Blocked floors: auto-fix ──
+        // ── Blocked floors: auto-fix (with attempt cap) ──
         if (floor.status === 'blocked' && !fixedThisCycle.has(floor.id)) {
-          fixedThisCycle.add(floor.id);
+          const attempts = state[stateKey].fixAttempts || 0;
 
-          console.log(`[Heartbeat] Auto-fixing blocked floor: ${floor.name}`);
-          addLog(goal.id, floor.id, 'Steven', 'Heartbeat: auto-fix triggered for blocked floor');
-
-          try {
-            const result = await fixFloor(floor.id, `Heartbeat: floor "${floor.name}" is blocked. Status: ${floor.status}`);
-            state[stateKey].lastFixAttempt = now;
-            state[stateKey].lastFixResult = result.fixed ? 'fixed' : 'failed';
-
-            if (result.fixed) {
-              console.log(`[Heartbeat] Fixed: ${floor.name}`);
-              addLog(goal.id, floor.id, 'Steven', `Heartbeat: auto-fix succeeded`);
-            } else {
-              console.log(`[Heartbeat] Fix failed: ${floor.name}`);
-              addLog(goal.id, floor.id, 'Steven', `Heartbeat: auto-fix failed — ${result.summary || 'no details'}`);
+          if (attempts >= MAX_FIX_ATTEMPTS) {
+            // Already gave up — don't retry
+            if (!state[stateKey].gaveUp) {
+              state[stateKey].gaveUp = true;
+              console.warn(`[Heartbeat] Giving up on "${floor.name}" after ${MAX_FIX_ATTEMPTS} failed fix attempts`);
+              addLog(goal.id, floor.id, 'Steven', `Heartbeat: giving up after ${MAX_FIX_ATTEMPTS} failed fix attempts`);
+              sendTelegram(`⛔ Steven gave up on "${floor.name}" after ${MAX_FIX_ATTEMPTS} failed attempts. Manual intervention needed.`).catch(() => {});
             }
-          } catch (err) {
-            console.error(`[Heartbeat] Fix error for ${floor.name}:`, err.message);
-            addLog(goal.id, floor.id, 'Steven', `Heartbeat: fix error — ${err.message}`);
-            state[stateKey].lastFixAttempt = now;
-            state[stateKey].lastFixResult = 'error';
+          } else {
+            fixedThisCycle.add(floor.id);
+
+            console.log(`[Heartbeat] Auto-fixing blocked floor: ${floor.name} (attempt ${attempts + 1}/${MAX_FIX_ATTEMPTS})`);
+            addLog(goal.id, floor.id, 'Steven', `Heartbeat: auto-fix attempt ${attempts + 1}/${MAX_FIX_ATTEMPTS}`);
+
+            try {
+              const result = await fixFloor(floor.id, `Heartbeat: floor "${floor.name}" is blocked. Status: ${floor.status}`);
+              state[stateKey].lastFixAttempt = now;
+
+              if (result.fixed) {
+                state[stateKey].lastFixResult = 'fixed';
+                state[stateKey].fixAttempts = 0; // reset on success
+                state[stateKey].gaveUp = false;
+                console.log(`[Heartbeat] Fixed: ${floor.name}`);
+                addLog(goal.id, floor.id, 'Steven', `Heartbeat: auto-fix succeeded`);
+              } else {
+                state[stateKey].lastFixResult = 'failed';
+                state[stateKey].fixAttempts = attempts + 1;
+                console.log(`[Heartbeat] Fix failed: ${floor.name} (${attempts + 1}/${MAX_FIX_ATTEMPTS})`);
+                addLog(goal.id, floor.id, 'Steven', `Heartbeat: auto-fix failed — ${result.summary || 'no details'}`);
+              }
+            } catch (err) {
+              console.error(`[Heartbeat] Fix error for ${floor.name}:`, err.message);
+              addLog(goal.id, floor.id, 'Steven', `Heartbeat: fix error — ${err.message}`);
+              state[stateKey].lastFixAttempt = now;
+              state[stateKey].lastFixResult = 'error';
+              state[stateKey].fixAttempts = attempts + 1;
+            }
           }
         }
 

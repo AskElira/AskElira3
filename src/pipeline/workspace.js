@@ -5,6 +5,9 @@ const { execSync, execFileSync } = require('child_process');
 
 const WORKSPACES_DIR = path.join(process.cwd(), 'workspaces');
 
+// ── Per-goal write queue to prevent concurrent workspace corruption ──
+const writeQueues = new Map();
+
 function assertSafePath(goalId, resolvedPath) {
   const root = path.resolve(WORKSPACES_DIR, goalId);
   if (!resolvedPath.startsWith(root + path.sep) && resolvedPath !== root) {
@@ -118,6 +121,20 @@ function rollbackWorkspace(goalId) {
   return true;
 }
 
+/**
+ * Queued write — serializes all writes for the same goalId.
+ * Prevents concurrent git commits and file overwrites from parallel floors.
+ */
+function queuedWriteFile(goalId, filename, content) {
+  const prev = writeQueues.get(goalId) || Promise.resolve();
+  const next = prev.then(
+    () => writeFile(goalId, filename, content),
+    () => writeFile(goalId, filename, content) // continue even if previous write failed
+  );
+  writeQueues.set(goalId, next);
+  return next;
+}
+
 function deleteWorkspace(goalId) {
   const dir = path.join(WORKSPACES_DIR, goalId);
   if (fs.existsSync(dir)) {
@@ -127,4 +144,4 @@ function deleteWorkspace(goalId) {
   return false;
 }
 
-module.exports = { ensureGoalDir, writeFile, readFile, listFiles, getWorkspacePath, readAllFiles, getWorkspaceSummary, rollbackWorkspace, deleteWorkspace };
+module.exports = { ensureGoalDir, writeFile: queuedWriteFile, readFile, listFiles, getWorkspacePath, readAllFiles, getWorkspaceSummary, rollbackWorkspace, deleteWorkspace };

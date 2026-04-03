@@ -2,6 +2,11 @@ const { chat } = require('../llm');
 const { config } = require('../config');
 const { addLog } = require('../db');
 const { wrapInput } = require('../hermes/utils');
+const { createBreaker, CircuitOpenError } = require('../circuit-breaker');
+
+const tavilyBreaker = createBreaker('tavily');
+const braveBreaker = createBreaker('brave');
+const lightpandaBreaker = createBreaker('lightpanda');
 
 const ALBA_SYSTEM = `You are Alba, the research agent for AskElira 3.
 
@@ -46,25 +51,39 @@ async function research(floor, goal, vexFeedback) {
 
   // Tier 1: Tavily
   if (config.hasTavily) {
-    const { context, urls } = await tavilySearch(`${goalText} ${floorDescription}`);
-    searchContext = context;
-    searchUrls = urls;
-  // Tier 2: Brave
-  } else if (config.hasBrave) {
-    const { context, urls } = await braveSearch(`${goalText} ${floorDescription}`);
-    searchContext = context;
-    searchUrls = urls;
+    try {
+      const { context, urls } = await tavilyBreaker.call(() => tavilySearch(`${goalText} ${floorDescription}`));
+      searchContext = context;
+      searchUrls = urls;
+    } catch (err) {
+      if (err instanceof CircuitOpenError) console.log(`[Alba] Tavily circuit open — skipping`);
+      else console.error('[Alba] Tavily search failed:', err.message);
+    }
+  }
+  // Tier 2: Brave (fallback if Tavily had no results or is unavailable)
+  if (!searchContext && config.hasBrave) {
+    try {
+      const { context, urls } = await braveBreaker.call(() => braveSearch(`${goalText} ${floorDescription}`));
+      searchContext = context;
+      searchUrls = urls;
+    } catch (err) {
+      if (err instanceof CircuitOpenError) console.log(`[Alba] Brave circuit open — skipping`);
+      else console.error('[Alba] Brave search failed:', err.message);
+    }
   }
 
   // Tier 3: Lightpanda — enhance with full page content
   if (config.hasLightpanda) {
-    if (searchUrls.length > 0) {
-      // Scrape top 2 URLs from search results for full content
-      const fullContent = await lightpandaScrape(searchUrls.slice(0, 2));
-      if (fullContent) searchContext += `\n\n## Full Page Content\n${fullContent}`;
-    } else if (!searchContext) {
-      // No search API — use Lightpanda to search DuckDuckGo directly
-      searchContext = await lightpandaSearch(`${goalText} ${floorDescription}`);
+    try {
+      if (searchUrls.length > 0) {
+        const fullContent = await lightpandaBreaker.call(() => lightpandaScrape(searchUrls.slice(0, 2)));
+        if (fullContent) searchContext += `\n\n## Full Page Content\n${fullContent}`;
+      } else if (!searchContext) {
+        searchContext = await lightpandaBreaker.call(() => lightpandaSearch(`${goalText} ${floorDescription}`));
+      }
+    } catch (err) {
+      if (err instanceof CircuitOpenError) console.log(`[Alba] Lightpanda circuit open — skipping`);
+      else console.error('[Alba] Lightpanda failed:', err.message);
     }
   }
 

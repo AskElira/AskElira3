@@ -1,6 +1,7 @@
 const { chat } = require('../llm');
 const { addLog, updateFloorVex } = require('../db');
 const { wrapInput } = require('../hermes/utils');
+const { validateSchema, VEX_RESEARCH_SCHEMA, VEX_BUILD_SCHEMA, SchemaValidationError } = require('../schema-validator');
 
 const VEX_RESEARCH_SYSTEM = `You are Vex, the validation agent for AskElira 3. Gate 1: Research Validation.
 
@@ -30,12 +31,12 @@ CRITICAL: Return ONLY valid JSON. No markdown, no explanation.
 Format: {"valid": true/false, "issues": ["issue 1"], "securityFlags": ["flag 1"], "score": 0-100}`;
 
 /**
- * Parse JSON from LLM response with fallback.
- * Uses the shared parseJSON which tries all candidates longest-first.
+ * Parse JSON from LLM response — strict, no fallback.
+ * Uses the shared parseJSON then validates against schema.
  */
 const { parseJSON: parseVexJSON_shared } = require('../hermes/index');
-function parseVexJSON(text, fallback) {
-  return parseVexJSON_shared(text, fallback);
+function parseVexJSON(text) {
+  return parseVexJSON_shared(text, null);
 }
 
 /**
@@ -50,34 +51,26 @@ async function vexValidateResearch(floor, research) {
   const floorId = floor.id;
   addLog(goalId, floorId, 'Vex', `Gate 1: Validating research for ${floor.name}`);
 
-  try {
-    const messages = [{
-      role: 'user',
-      content: `Validate this research for building Floor ${wrapInput(floor.name)}.\n\nFloor Description: ${wrapInput(floor.description)}\nSuccess Condition: ${wrapInput(floor.success_condition)}\nExpected Deliverable: ${wrapInput(floor.deliverable)}\n\nAlba's Research:\n${wrapInput(research, 3000)}\n\nReturn your validation as JSON.`
-    }];
+  const messages = [{
+    role: 'user',
+    content: `Validate this research for building Floor ${wrapInput(floor.name)}.\n\nFloor Description: ${wrapInput(floor.description)}\nSuccess Condition: ${wrapInput(floor.success_condition)}\nExpected Deliverable: ${wrapInput(floor.deliverable)}\n\nAlba's Research:\n${wrapInput(research, 3000)}\n\nReturn your validation as JSON.`
+  }];
 
-    const reply = await chat(messages, { system: VEX_RESEARCH_SYSTEM, goalId, floorId, agent: 'Vex' });
-    const result = parseVexJSON(reply, { valid: true, issues: [], enriched: '', score: 70 });
+  const reply = await chat(messages, { system: VEX_RESEARCH_SYSTEM, goalId, floorId, agent: 'Vex' });
+  const parsed = parseVexJSON(reply);
+  const result = validateSchema(parsed, VEX_RESEARCH_SCHEMA);
 
-    // Normalize
-    result.valid = !!result.valid;
-    result.issues = Array.isArray(result.issues) ? result.issues : [];
-    result.enriched = result.enriched || '';
-    result.score = typeof result.score === 'number' ? result.score : 70;
+  // Normalize optional fields that passed validation
+  result.issues = result.issues || [];
+  result.enriched = result.enriched || '';
 
-    // Save score to DB
-    updateFloorVex(floorId, 1, result.score);
+  // Save score to DB
+  updateFloorVex(floorId, 1, result.score);
 
-    const status = result.valid ? 'PASSED' : 'BLOCKED';
-    addLog(goalId, floorId, 'Vex', `Gate 1 ${status} (score: ${result.score}). Issues: ${result.issues.length}`);
-    console.log(`[Vex/Gate1] ${status}: score=${result.score}, issues=${result.issues.length}`);
-    return result;
-  } catch (err) {
-    console.error(`[Vex/Gate1] Error:`, err.message);
-    addLog(goalId, floorId, 'Vex', `Gate 1 error: ${err.message}`);
-    // On error, pass through (don't block the pipeline on Vex failure)
-    return { valid: true, issues: [], enriched: '', score: 50 };
-  }
+  const status = result.valid ? 'PASSED' : 'BLOCKED';
+  addLog(goalId, floorId, 'Vex', `Gate 1 ${status} (score: ${result.score}). Issues: ${result.issues.length}`);
+  console.log(`[Vex/Gate1] ${status}: score=${result.score}, issues=${result.issues.length}`);
+  return result;
 }
 
 /**
@@ -92,37 +85,30 @@ async function vexValidateBuild(floor, davidOutput, goalId) {
   const floorId = floor.id;
   addLog(goalId, floorId, 'Vex', `Gate 2: Validating build for ${floor.name}`);
 
-  try {
-    const outputStr = typeof davidOutput === 'string'
-      ? davidOutput
-      : JSON.stringify(davidOutput, null, 2);
+  const outputStr = typeof davidOutput === 'string'
+    ? davidOutput
+    : JSON.stringify(davidOutput, null, 2);
 
-    const messages = [{
-      role: 'user',
-      content: `Validate this build output for Floor ${wrapInput(floor.name)}.\n\nFloor Description: ${wrapInput(floor.description)}\nSuccess Condition: ${wrapInput(floor.success_condition)}\nExpected Deliverable: ${wrapInput(floor.deliverable)}\n\nDavid's Output:\n${wrapInput(outputStr, 8000)}\n\nReturn your validation as JSON.`
-    }];
+  const messages = [{
+    role: 'user',
+    content: `Validate this build output for Floor ${wrapInput(floor.name)}.\n\nFloor Description: ${wrapInput(floor.description)}\nSuccess Condition: ${wrapInput(floor.success_condition)}\nExpected Deliverable: ${wrapInput(floor.deliverable)}\n\nDavid's Output:\n${wrapInput(outputStr, 8000)}\n\nReturn your validation as JSON.`
+  }];
 
-    const reply = await chat(messages, { system: VEX_BUILD_SYSTEM, goalId, floorId, agent: 'Vex' });
-    const result = parseVexJSON(reply, { valid: true, issues: [], securityFlags: [], score: 60 });
+  const reply = await chat(messages, { system: VEX_BUILD_SYSTEM, goalId, floorId, agent: 'Vex' });
+  const parsed = parseVexJSON(reply);
+  const result = validateSchema(parsed, VEX_BUILD_SCHEMA);
 
-    // Normalize
-    result.valid = !!result.valid;
-    result.issues = Array.isArray(result.issues) ? result.issues : [];
-    result.securityFlags = Array.isArray(result.securityFlags) ? result.securityFlags : [];
-    result.score = typeof result.score === 'number' ? result.score : 60;
+  // Normalize optional fields that passed validation
+  result.issues = result.issues || [];
+  result.securityFlags = result.securityFlags || [];
 
-    // Save score to DB
-    updateFloorVex(floorId, 2, result.score);
+  // Save score to DB
+  updateFloorVex(floorId, 2, result.score);
 
-    const status = result.valid ? 'PASSED' : 'BLOCKED';
-    addLog(goalId, floorId, 'Vex', `Gate 2 ${status} (score: ${result.score}). Issues: ${result.issues.length}, Security: ${result.securityFlags.length}`);
-    console.log(`[Vex/Gate2] ${status}: score=${result.score}, issues=${result.issues.length}, security=${result.securityFlags.length}`);
-    return result;
-  } catch (err) {
-    console.error(`[Vex/Gate2] Error:`, err.message);
-    addLog(goalId, floorId, 'Vex', `Gate 2 error: ${err.message}`);
-    return { valid: true, issues: [], securityFlags: [], score: 50 };
-  }
+  const status = result.valid ? 'PASSED' : 'BLOCKED';
+  addLog(goalId, floorId, 'Vex', `Gate 2 ${status} (score: ${result.score}). Issues: ${result.issues.length}, Security: ${result.securityFlags.length}`);
+  console.log(`[Vex/Gate2] ${status}: score=${result.score}, issues=${result.issues.length}, security=${result.securityFlags.length}`);
+  return result;
 }
 
 module.exports = { vexValidateResearch, vexValidateBuild };
