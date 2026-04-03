@@ -934,7 +934,7 @@ async function createGoal() {
 
 // ── Tabs ──
 function switchTab(name) {
-  document.querySelectorAll('.tab').forEach(function(t) {
+  document.querySelectorAll('.header-tab').forEach(function(t) {
     t.classList.toggle('active', t.dataset.tab === name);
   });
   document.querySelectorAll('.tab-content').forEach(function(tc) {
@@ -980,7 +980,7 @@ function bindEvents() {
     this.style.height = 'auto';
     this.style.height = Math.min(this.scrollHeight, 80) + 'px';
   });
-  document.querySelectorAll('.tab').forEach(function(t) {
+  document.querySelectorAll('.header-tab').forEach(function(t) {
     t.addEventListener('click', function() { switchTab(t.dataset.tab); });
   });
   document.getElementById('new-goal-btn').addEventListener('click', function() {
