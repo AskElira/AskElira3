@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
-const { listGoals, getGoal, listFloors, getFloor, getLogs, addLog } = require('../db');
+const { listGoals, getGoal, listFloors, getFloor, getLogs, addLog, getTelegramMessages, deleteGoal, addWebChatMessage, getWebChatMessages } = require('../db');
 const { hermesChat, hermesRoute } = require('../hermes/index');
 const { runPlanner } = require('../pipeline/planner');
 const { runPipeline } = require('../pipeline/floor-runner');
@@ -67,6 +67,19 @@ router.post('/api/goals', goalCreationLimit, async (req, res) => {
         addLog(goal.id, null, 'Hermes', `Pipeline error: ${err.message}`);
       }
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete a goal + floors + logs + workspace
+router.delete('/api/goals/:id', (req, res) => {
+  try {
+    const goal = deleteGoal(req.params.id);
+    if (!goal) return res.status(404).json({ error: 'Goal not found' });
+    workspace.deleteWorkspace(req.params.id);
+    console.log(`[Routes] Deleted goal: ${goal.text.substring(0, 60)}`);
+    res.json({ deleted: true, id: goal.id, text: goal.text });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -294,7 +307,30 @@ router.get('/api/logs', (req, res) => {
   }
 });
 
+// ── Telegram Messages ──
+
+router.get('/api/telegram-messages', (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 100;
+    const messages = getTelegramMessages(limit);
+    res.json(messages);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Chat ──
+
+// Get persisted web chat history
+router.get('/api/chat-messages', (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const messages = getWebChatMessages(limit);
+    res.json(messages);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 router.post('/api/chat', async (req, res) => {
   try {
@@ -302,6 +338,10 @@ router.post('/api/chat', async (req, res) => {
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'Messages array is required' });
     }
+
+    // Persist the latest user message
+    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+    if (lastUserMsg) addWebChatMessage('user', lastUserMsg.content);
 
     // Inject workspace context if goalId provided
     let contextMessages = messages;
@@ -326,12 +366,8 @@ router.post('/api/chat', async (req, res) => {
 
     const reply = await hermesChat(contextMessages);
 
-    // Mirror to Telegram if configured
-    const { sendTelegram } = require('../notify');
-    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
-    if (lastUserMsg) {
-      await sendTelegram(`*Chat* — ${lastUserMsg.content}\n\n*Hermes:* ${reply.substring(0, 300)}${reply.length > 300 ? '...' : ''}`);
-    }
+    // Persist the assistant reply
+    addWebChatMessage('assistant', reply);
 
     res.json({ reply });
   } catch (err) {
@@ -408,6 +444,27 @@ router.get('/api/status', (req, res) => {
       llmTotalCalls: usage.calls,
       uptime: Math.round(process.uptime()),
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Settings ──
+
+router.get('/api/settings', (req, res) => {
+  try {
+    const settings = require('../settings');
+    res.json(settings.get());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/api/settings', (req, res) => {
+  try {
+    const settings = require('../settings');
+    const updated = settings.update(req.body || {});
+    res.json(updated);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -52,6 +52,19 @@ Example: {"interests": ["crypto", "trading"], "techStack": ["Python"]}`
 }
 
 /**
+ * Validate that a suggestion is actionable and not garbage.
+ */
+function isValidSuggestion(s) {
+  if (!s || typeof s !== 'string') return false;
+  if (s.length < 15 || s.length > 300) return false;
+  // Reject pronoun-only or vague suggestions
+  if (/^(it|that|this|the thing|something|build it|do it|make it)$/i.test(s.trim())) return false;
+  // Must have at least 4 words to be a meaningful description
+  if (s.trim().split(/\s+/).length < 4) return false;
+  return true;
+}
+
+/**
  * After a goal completes, reflect and propose what to build next.
  * Returns a suggestion string or null.
  */
@@ -89,6 +102,10 @@ Just the one sentence. No explanation.`
       maxTokens: 200,
     });
     const suggestion = reply.trim().replace(/^["']|["']$/g, '');
+    if (!isValidSuggestion(suggestion)) {
+      console.warn('[AGI] Rejected bad suggestion:', suggestion);
+      return null;
+    }
     userModel.addSuggestion(suggestion);
     return suggestion;
   } catch (_) { return null; }

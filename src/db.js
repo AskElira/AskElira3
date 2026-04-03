@@ -55,6 +55,14 @@ db.exec(`
     tokens_in INTEGER, tokens_out INTEGER, total_tokens INTEGER,
     duration_ms INTEGER, created_at INTEGER DEFAULT (unixepoch())
   );
+
+  CREATE TABLE IF NOT EXISTS telegram_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    role    TEXT NOT NULL,
+    content TEXT NOT NULL,
+    source  TEXT NOT NULL DEFAULT 'telegram',
+    created_at INTEGER DEFAULT (unixepoch())
+  );
 `);
 
 // Migration: add columns to existing tables if they are missing
@@ -119,6 +127,19 @@ function updateGoal(id, fields) {
 
 function listGoals() {
   return db.prepare('SELECT * FROM goals ORDER BY created_at DESC').all();
+}
+
+function deleteGoal(id) {
+  const goal = getGoal(id);
+  if (!goal) return null;
+  const del = db.transaction(() => {
+    db.prepare('DELETE FROM llm_calls WHERE goal_id = ?').run(id);
+    db.prepare('DELETE FROM logs WHERE goal_id = ?').run(id);
+    db.prepare('DELETE FROM floors WHERE goal_id = ?').run(id);
+    db.prepare('DELETE FROM goals WHERE id = ?').run(id);
+  });
+  del();
+  return goal;
 }
 
 // ── Floors ──
@@ -233,11 +254,52 @@ function incrementGoalLlmUsage(goalId, tokens) {
   db.prepare(`UPDATE goals SET llm_calls = llm_calls + 1, tokens_est = tokens_est + ? WHERE id = ?`).run(tokens||0, goalId);
 }
 
+// ── Telegram Messages ──
+
+function addTelegramMessage(role, content) {
+  // Deduplicate: skip if the most recent message has identical role + content (within 10s)
+  const existing = db.prepare(
+    'SELECT id FROM telegram_messages WHERE role = ? AND content = ? AND created_at > unixepoch() - 10 ORDER BY id DESC LIMIT 1'
+  ).get(role, content);
+  if (existing) return existing.id;
+  const result = db.prepare(
+    'INSERT INTO telegram_messages (role, content, source) VALUES (?, ?, ?)'
+  ).run(role, content, 'telegram');
+  return result.lastInsertRowid;
+}
+
+function getTelegramMessages(limit = 100) {
+  return db.prepare(
+    'SELECT * FROM telegram_messages ORDER BY id ASC LIMIT ?'
+  ).all(limit);
+}
+
+function getRecentTelegramMessages(limit = 10) {
+  return db.prepare(
+    'SELECT role, content FROM telegram_messages ORDER BY id DESC LIMIT ?'
+  ).all(limit).reverse();
+}
+
+function addWebChatMessage(role, content) {
+  const result = db.prepare(
+    'INSERT INTO telegram_messages (role, content, source) VALUES (?, ?, ?)'
+  ).run(role, content, 'web');
+  return result.lastInsertRowid;
+}
+
+function getWebChatMessages(limit = 50) {
+  return db.prepare(
+    "SELECT * FROM telegram_messages WHERE source = 'web' ORDER BY id DESC LIMIT ?"
+  ).all(limit).reverse();
+}
+
 module.exports = {
   db,
-  createGoal, getGoal, updateGoal, listGoals,
+  createGoal, getGoal, updateGoal, listGoals, deleteGoal,
   createFloor, getFloor, updateFloor, listFloors, listLiveFloors, listBlockedFloors,
   updateFloorVex, updateFloorPatches,
   addLog, getLogs,
   logLlmCall, getLlmStats, incrementGoalLlmUsage,
+  addTelegramMessage, getTelegramMessages, getRecentTelegramMessages,
+  addWebChatMessage, getWebChatMessages,
 };

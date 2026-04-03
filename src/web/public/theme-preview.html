@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AskElira 3 — Ember/Warm Gold Theme Preview</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    .preview-section { padding: 32px 24px; border-bottom: 1px solid var(--border); }
+    .preview-section h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 1px; color: var(--accent); margin-bottom: 20px; }
+    .preview-grid { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+    .swatch { width: 80px; text-align: center; }
+    .swatch-color { width: 80px; height: 50px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 4px; }
+    .swatch-label { font-size: 10px; color: var(--text-dim); font-family: var(--mono); }
+    .swatch-hex { font-size: 10px; color: var(--text); font-family: var(--mono); }
+    .preview-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+    .mock-app { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin-top: 16px; }
+  </style>
+</head>
+<body style="padding: 0; margin: 0;">
+
+  <!-- Color Palette Swatches -->
+  <div class="preview-section">
+    <h2>Core Palette — Sand Neutrals</h2>
+    <div class="preview-grid">
+      <div class="swatch">
+        <div class="swatch-color" style="background:#111110"></div>
+        <div class="swatch-label">bg</div>
+        <div class="swatch-hex">#111110</div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background:#191918"></div>
+        <div class="swatch-label">surface</div>
+        <div class="swatch-hex">#191918</div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background:#222221"></div>
+        <div class="swatch-label">panel</div>
+        <div class="swatch-hex">#222221</div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background:#2a2a28"></div>
+        <div class="swatch-label">panel-hover</div>
+        <div class="swatch-hex">#2a2a28</div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background:#3b3a37"></div>
+        <div class="swatch-label">border</div>
+        <div class="swatch-hex">#3b3a37</div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background:#494844"></div>
+        <div class="swatch-label">border-strong</div>
+        <div class="swatch-hex">#494844</div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background:#b5b3ad"></div>
+        <div class="swatch-label">text-dim</div>
+        <div class="swatch-hex">#b5b3ad</div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background:#eeeeec"></div>
+        <div class="swatch-label">text</div>
+        <div class="swatch-hex">#eeeeec</div>
+      </div>
+    </div>
+
+    <h2>Accent — Amber/Gold</h2>
+    <div class="preview-grid">
+      <div class="swatch">
+        <div class="swatch-color" style="background:#ffc53d"></div>
+        <div class="swatch-label">accent</div>
+        <div class="swatch-hex">#ffc53d</div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background:#ffd60a"></div>
+        <div class="swatch-label">accent-hover</div>
+        <div class="swatch-hex">#ffd60a</div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background:#16120c"></div>
+        <div class="swatch-label">accent-text</div>
+        <div class="swatch-hex">#16120c</div>
+      </div>
+    </div>
+
+    <h2>Agent Colors</h2>
+    <div class="preview-grid">
+      <div class="swatch">
+        <div class="swatch-color" style="background:#ffc53d"></div>
+        <div class="swatch-label">Elira</div>
+        <div class="swatch-hex">#ffc53d</div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background:#e54d2e"></div>
+        <div class="swatch-label">Steven</div>
+        <div class="swatch-hex">#e54d2e</div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background:#4ccce6"></div>
+        <div class="swatch-label">Alba</div>
+        <div class="swatch-hex">#4ccce6</div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background:#ffd60a"></div>
+        <div class="swatch-label">David</div>
+        <div class="swatch-hex">#ffd60a</div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background:#d4a574"></div>
+        <div class="swatch-label">Vex</div>
+        <div class="swatch-hex">#d4a574</div>
+      </div>
+    </div>
+
+    <h2>Semantic Colors</h2>
+    <div class="preview-grid">
+      <div class="swatch">
+        <div class="swatch-color" style="background:#30a46c"></div>
+        <div class="swatch-label">green</div>
+        <div class="swatch-hex">#30a46c</div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background:#e5484d"></div>
+        <div class="swatch-label">red</div>
+        <div class="swatch-hex">#e5484d</div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background:#ffd60a"></div>
+        <div class="swatch-label">yellow</div>
+        <div class="swatch-hex">#ffd60a</div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background:#4ccce6"></div>
+        <div class="swatch-label">info/blue</div>
+        <div class="swatch-hex">#4ccce6</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Component Preview -->
+  <div class="preview-section">
+    <h2>Components</h2>
+
+    <!-- Buttons -->
+    <div class="preview-row">
+      <button class="btn">Build</button>
+      <button class="btn btn-steven">Fix with Steven</button>
+      <button class="btn btn-small">Small Button</button>
+      <button class="btn" disabled>Disabled</button>
+    </div>
+
+    <!-- Badges -->
+    <div class="preview-row">
+      <span class="badge planning">planning</span>
+      <span class="badge building">building</span>
+      <span class="badge researching">researching</span>
+      <span class="badge auditing">auditing</span>
+      <span class="badge reviewing">reviewing</span>
+      <span class="badge live">live</span>
+      <span class="badge blocked">blocked</span>
+      <span class="badge goal_met">goal met</span>
+    </div>
+
+    <!-- Agent Badges -->
+    <div class="preview-row">
+      <span class="agent-badge alba">Alba</span>
+      <span class="agent-badge david">David</span>
+      <span class="agent-badge vex">Vex</span>
+      <span class="agent-badge elira">Elira</span>
+      <span class="agent-badge steven">Steven</span>
+      <span class="agent-badge hermes">Hermes</span>
+    </div>
+
+    <!-- Hermes Mode Indicators -->
+    <div class="preview-row">
+      <span class="hermes-indicator elira-mode">Elira Mode</span>
+      <span class="hermes-indicator steven-mode">Steven Mode</span>
+    </div>
+
+    <!-- Tags -->
+    <div class="preview-row">
+      <span class="um-tag">Interest Tag</span>
+      <span class="um-tag tech">Tech Tag</span>
+      <span class="um-tag goal">Goal Tag</span>
+    </div>
+
+    <!-- Worker Badges -->
+    <div class="preview-row">
+      <span class="worker-badge researching"><span class="worker-name">Alba </span><span class="worker-phase">researching...</span> <span class="worker-dots"><span class="dot">.</span><span class="dot">.</span></span></span>
+      <span class="worker-badge building"><span class="worker-name">David </span><span class="worker-phase">coding...</span> <span class="worker-dots"><span class="dot">.</span><span class="dot">.</span></span></span>
+      <span class="worker-badge auditing"><span class="worker-name">Vex </span><span class="worker-phase">auditing...</span> <span class="worker-dots"><span class="dot">.</span><span class="dot">.</span></span></span>
+      <span class="worker-badge reviewing"><span class="worker-name">Elira </span><span class="worker-phase">reviewing...</span> <span class="worker-dots"><span class="dot">.</span><span class="dot">.</span></span></span>
+    </div>
+
+    <!-- Pills -->
+    <div class="preview-row">
+      <div class="pill"><span class="dot on"></span><span>Anthropic</span></div>
+      <div class="pill"><span class="dot on"></span><span>Telegram</span></div>
+      <div class="pill"><span class="dot"></span><span>Search</span></div>
+    </div>
+
+    <!-- Toasts -->
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+      <div class="toast success" style="position:static;animation:none">Pipeline complete!</div>
+      <div class="toast error" style="position:static;animation:none">Floor blocked</div>
+      <div class="toast info" style="position:static;animation:none">David is building...</div>
+    </div>
+
+    <!-- Vex Score Bars -->
+    <div style="max-width:300px;">
+      <div class="vex-score-bar">
+        <label>Vex1</label>
+        <div class="vex-bar"><div class="vex-bar-fill green" style="width:92%"></div></div>
+        <span class="vex-score-num">92</span>
+      </div>
+      <div class="vex-score-bar">
+        <label>Vex2</label>
+        <div class="vex-bar"><div class="vex-bar-fill yellow" style="width:68%"></div></div>
+        <span class="vex-score-num">68</span>
+      </div>
+      <div class="vex-score-bar">
+        <label>Vex</label>
+        <div class="vex-bar"><div class="vex-bar-fill red" style="width:35%"></div></div>
+        <span class="vex-score-num">35</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mock Full App Layout -->
+  <div class="preview-section">
+    <h2>Full Layout Preview</h2>
+    <div class="mock-app" style="height:600px">
+      <div class="app" style="height:600px">
+        <!-- Header -->
+        <header class="header">
+          <div class="header-left">
+            <h1>AskElira <span class="h-elira">3</span></h1>
+            <span class="hermes-indicator elira-mode">Hermes</span>
+          </div>
+          <div class="status-pills">
+            <div class="pill"><span class="dot on"></span><span>Anthropic</span></div>
+            <div class="pill"><span class="dot on"></span><span>Telegram</span></div>
+            <div class="pill"><span class="dot on"></span><span>Tavily</span></div>
+          </div>
+        </header>
+
+        <!-- Sidebar -->
+        <aside class="sidebar">
+          <h2>Goals</h2>
+          <div class="goal-list-items">
+            <div class="goal-item active">
+              <span class="goal-text">Build a real-time trading dashboard</span>
+              <div class="goal-meta">
+                <span class="badge building">building</span>
+                <span class="floor-progress">2/5 floors</span>
+              </div>
+            </div>
+            <div class="goal-item">
+              <span class="goal-text">Deploy authentication system</span>
+              <div class="goal-meta">
+                <span class="badge live">live</span>
+                <span class="floor-progress">3/3 floors</span>
+              </div>
+            </div>
+            <div class="goal-item">
+              <span class="goal-text">API rate limiter middleware</span>
+              <div class="goal-meta">
+                <span class="badge goal_met">goal met</span>
+                <span class="floor-progress">4/4 floors</span>
+              </div>
+            </div>
+            <div class="goal-item">
+              <span class="goal-text">WebSocket notification service</span>
+              <div class="goal-meta">
+                <span class="badge blocked">blocked</span>
+                <span class="floor-progress">1/3 floors</span>
+              </div>
+            </div>
+          </div>
+          <div class="new-goal-btn">+ New Goal</div>
+
+          <div class="user-model-panel">
+            <h2>User Model</h2>
+            <div>
+              <div class="um-row"><span class="um-label">Name</span><span class="um-value">OpenClawd</span></div>
+              <div class="um-row"><span class="um-label">Interests</span><div class="um-tags"><span class="um-tag">trading</span><span class="um-tag">AI agents</span><span class="um-tag">automation</span></div></div>
+              <div class="um-row"><span class="um-label">Tech Stack</span><div class="um-tags"><span class="um-tag tech">Node.js</span><span class="um-tag tech">Python</span><span class="um-tag tech">React</span></div></div>
+              <div class="um-row"><span class="um-label">Goals</span><div class="um-tags"><span class="um-tag goal">pass TopStep</span><span class="um-tag goal">scale AskElira</span></div></div>
+            </div>
+          </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main">
+          <div class="input-area">
+            <textarea placeholder="Describe what you want to build..." rows="2" style="flex:1"></textarea>
+            <button class="btn">Build</button>
+          </div>
+
+          <div class="tabs">
+            <button class="tab active" data-tab="building">Building</button>
+            <button class="tab" data-tab="workspace">Workspace</button>
+            <button class="tab" data-tab="chat">Chat</button>
+          </div>
+
+          <div style="flex:1;overflow-y:auto">
+            <div class="goal-header">
+              <h2>Build a real-time trading dashboard</h2>
+              <div class="meta">
+                <span class="badge building">building</span>
+                <span>5 floors</span>
+                <span>40% complete</span>
+                <span>2h ago</span>
+              </div>
+            </div>
+
+            <div class="floor-list">
+              <div class="floor-card live">
+                <div class="floor-header">
+                  <span class="floor-name">Data Ingestion Layer</span>
+                  <div class="floor-right">
+                    <span class="badge live">live</span>
+                    <span class="floor-num">F1</span>
+                  </div>
+                </div>
+                <div class="floor-desc">WebSocket connection to market data feed with reconnection logic</div>
+                <div class="floor-agents">
+                  <span class="agent-badge alba">Alba</span>
+                  <span class="agent-badge david">David</span>
+                  <span class="agent-badge vex">Vex</span>
+                  <span class="agent-badge elira">Elira</span>
+                </div>
+                <div class="vex-score-bar">
+                  <label>Vex1</label>
+                  <div class="vex-bar"><div class="vex-bar-fill green" style="width:95%"></div></div>
+                  <span class="vex-score-num">95</span>
+                </div>
+              </div>
+
+              <div class="connector"></div>
+
+              <div class="floor-card live">
+                <div class="floor-header">
+                  <span class="floor-name">Chart Rendering Engine</span>
+                  <div class="floor-right">
+                    <span class="badge live">live</span>
+                    <span class="floor-num">F2</span>
+                  </div>
+                </div>
+                <div class="floor-desc">Candlestick charts with TradingView lightweight lib</div>
+                <div class="floor-agents">
+                  <span class="agent-badge alba">Alba</span>
+                  <span class="agent-badge david">David</span>
+                  <span class="agent-badge vex">Vex</span>
+                  <span class="agent-badge elira">Elira</span>
+                </div>
+                <div class="vex-score-bar">
+                  <label>Vex2</label>
+                  <div class="vex-bar"><div class="vex-bar-fill green" style="width:88%"></div></div>
+                  <span class="vex-score-num">88</span>
+                </div>
+              </div>
+
+              <div class="connector"></div>
+
+              <div class="floor-card building">
+                <div class="floor-header">
+                  <span class="floor-name">Order Management
+                    <span class="worker-badge building"><span class="worker-name">David </span><span class="worker-phase">coding...</span> <span class="worker-dots"><span class="dot">.</span><span class="dot">.</span></span></span>
+                  </span>
+                  <div class="floor-right">
+                    <span class="floor-iter">iter 1/3</span>
+                    <span class="badge building">building</span>
+                    <span class="floor-num">F3</span>
+                  </div>
+                </div>
+                <div class="floor-desc">Place, modify, and cancel orders with risk checks</div>
+                <div class="floor-agents">
+                  <span class="agent-badge alba">Alba</span>
+                  <span class="agent-badge david">David</span>
+                </div>
+                <div class="vex-score-bar">
+                  <label>Vex1</label>
+                  <div class="vex-bar"><div class="vex-bar-fill yellow" style="width:72%"></div></div>
+                  <span class="vex-score-num">72</span>
+                </div>
+              </div>
+
+              <div class="connector"></div>
+
+              <div class="floor-card">
+                <div class="floor-header">
+                  <span class="floor-name">Position Tracker</span>
+                  <div class="floor-right">
+                    <span class="badge pending">pending</span>
+                    <span class="floor-num">F4</span>
+                  </div>
+                </div>
+                <div class="floor-desc">Real-time P&L calculation and position sizing</div>
+              </div>
+
+              <div class="connector"></div>
+
+              <div class="floor-card blocked">
+                <div class="floor-header">
+                  <span class="floor-name">Risk Dashboard</span>
+                  <div class="floor-right">
+                    <span class="badge blocked">blocked</span>
+                    <span class="floor-num">F5</span>
+                  </div>
+                </div>
+                <div class="floor-desc">Drawdown monitoring, daily loss limits, exposure heatmap</div>
+                <div class="floor-agents">
+                  <span class="agent-badge alba">Alba</span>
+                  <span class="agent-badge david">David</span>
+                  <span class="agent-badge vex">Vex</span>
+                  <span class="agent-badge steven">Steven</span>
+                </div>
+                <button class="btn btn-steven btn-small floor-fix-btn">Fix with Steven</button>
+              </div>
+            </div>
+          </div>
+        </main>
+
+        <!-- Log Stream -->
+        <div class="log-stream">
+          <div class="log-stream-header">
+            <h3>Live Logs</h3>
+          </div>
+          <div>
+            <div class="log-entry"><span class="log-time">2m ago</span><span class="log-agent Alba">Alba</span><span class="log-msg">Researching order management patterns for F3...</span></div>
+            <div class="log-entry"><span class="log-time">1m ago</span><span class="log-agent David">David</span><span class="log-msg">Building order-manager.js with limit/market order support</span></div>
+            <div class="log-entry"><span class="log-time">45s ago</span><span class="log-agent Vex">Vex</span><span class="log-msg">Vex1 audit: 72/100 — missing error handling in cancelOrder()</span></div>
+            <div class="log-entry"><span class="log-time">30s ago</span><span class="log-agent David">David</span><span class="log-msg">Fixing cancelOrder() error handling, adding retry logic</span></div>
+            <div class="log-entry"><span class="log-time">15s ago</span><span class="log-agent Steven">Steven</span><span class="log-msg">Patching F5 risk-dashboard.js — fixed import path for position-tracker</span></div>
+            <div class="log-entry"><span class="log-time">5s ago</span><span class="log-agent Elira">Elira</span><span class="log-msg">F2 approved. Chart rendering meets all success conditions.</span></div>
+            <div class="log-entry"><span class="log-time">now</span><span class="log-agent Hermes">Hermes</span><span class="log-msg">Pipeline progress: 2/5 floors live, 1 building, 1 blocked</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chat Preview -->
+  <div class="preview-section">
+    <h2>Chat Preview</h2>
+    <div style="max-width:600px;">
+      <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:16px;">
+        <div class="chat-msg user">Build me a trading dashboard with real-time charts</div>
+        <div class="chat-msg assistant">
+          <span class="mode-tag elira">Elira mode</span>I've broken this into 5 floors. Starting with data ingestion (F1), then chart rendering (F2), order management (F3), position tracking (F4), and a risk dashboard (F5). Alba is researching F1 now.</div>
+        <div class="chat-msg user">How's the progress looking?</div>
+        <div class="chat-msg assistant">
+          <span class="mode-tag elira">Elira mode</span>F1 and F2 are live. David is building F3 (order management) — Vex1 scored 72, needs error handling work. F5 is blocked, Steven is patching it.</div>
+      </div>
+      <div class="chat-input">
+        <input type="text" placeholder="Chat with Hermes..." style="flex:1">
+        <button class="btn">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Code Viewer Preview -->
+  <div class="preview-section">
+    <h2>Code Viewer Preview</h2>
+    <div class="code-viewer" style="max-width:600px;height:200px;">
+      <div class="code-viewer-header">
+        <span>src/order-manager.js</span>
+      </div>
+      <div class="code-viewer-content">
+        <pre><span class="kw">const</span> { EventEmitter } = <span class="kw">require</span>(<span class="str">'events'</span>);
+
+<span class="kw">class</span> <span class="fn">OrderManager</span> <span class="kw">extends</span> EventEmitter {
+  <span class="kw">constructor</span>(config) {
+    <span class="kw">super</span>();
+    <span class="kw">this</span>.maxPosition = config.maxPosition || <span class="num">10</span>;
+    <span class="kw">this</span>.dailyLossLimit = config.dailyLossLimit || <span class="num">2000</span>;
+  }
+
+  <span class="cmt">// Place a new order with risk validation</span>
+  <span class="kw">async</span> <span class="fn">placeOrder</span>(symbol, side, qty, price) {
+    <span class="kw">if</span> (qty > <span class="kw">this</span>.maxPosition) {
+      <span class="kw">throw new</span> Error(<span class="str">'Position limit exceeded'</span>);
+    }
+    <span class="kw">return</span> { orderId: Date.<span class="fn">now</span>(), status: <span class="str">'filled'</span> };
+  }
+}</pre>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

@@ -4,9 +4,9 @@
  * Runs every 5 minutes (configurable via HEARTBEAT_INTERVAL_MS env).
  * - Queries DB for all goals with status 'building' or 'blocked'
  * - For each blocked floor: calls fixFloor() from steven.js (max 1 fix attempt per floor per cycle)
- * - For each building floor stalled >30 min: logs a warning + Telegram alert
+ * - For each building floor stalled >30 min: logs a warning
  * - Tracks lastChecked per floor in data/heartbeat-state.json
- * - Sends Telegram on auto-fix
+ * - Every 6 hours: sends a Steven fix summary to Telegram (no per-fix alerts)
  *
  * Exports: startHeartbeat(), stopHeartbeat()
  */
@@ -20,10 +20,12 @@ const { config } = require('./config');
 
 const INTERVAL_MS = parseInt(process.env.HEARTBEAT_INTERVAL_MS || String(5 * 60 * 1000), 10);
 const STALL_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
+const SUMMARY_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 const STATE_FILE = path.resolve(__dirname, '..', 'data', 'heartbeat-state.json');
 
 let heartbeatTimer = null;
+let summaryTimer = null;
 
 // ── State persistence ───────────────────────────────────────────────────────
 
@@ -46,6 +48,29 @@ function saveState(state) {
   }
 }
 
+// ── 6-hour Steven fix summary ───────────────────────────────────────────────
+
+async function sendStevenSummary() {
+  const state = loadState();
+  const now = Date.now();
+  const sixHoursAgo = now - SUMMARY_INTERVAL_MS;
+
+  const fixes = Object.entries(state).filter(([key, val]) => {
+    return val.lastFixAttempt && val.lastFixAttempt > sixHoursAgo;
+  });
+
+  if (fixes.length === 0) return;
+
+  const lines = fixes.map(([floorId, val]) => {
+    const icon = val.lastFixResult === 'fixed' ? '✅' : val.lastFixResult === 'failed' ? '⚠️' : '❌';
+    const ago = Math.round((now - val.lastFixAttempt) / 60000);
+    return `${icon} ${val.floorName || floorId.substring(0, 8)} — ${val.lastFixResult} (${ago}m ago)`;
+  });
+
+  const summary = `*Steven Summary (6h)*\n\n${lines.join('\n')}`;
+  await sendTelegram(summary);
+}
+
 // ── Core cycle ──────────────────────────────────────────────────────────────
 
 async function heartbeatCycle() {
@@ -65,7 +90,6 @@ async function heartbeatCycle() {
       for (const floor of floors) {
         const stateKey = floor.id;
         const lastChecked = state[stateKey]?.lastChecked || 0;
-        const lastFixAttempt = state[stateKey]?.lastFixAttempt || 0;
 
         // Update lastChecked
         if (!state[stateKey]) state[stateKey] = {};
@@ -87,9 +111,6 @@ async function heartbeatCycle() {
             if (result.fixed) {
               console.log(`[Heartbeat] Fixed: ${floor.name}`);
               addLog(goal.id, floor.id, 'Steven', `Heartbeat: auto-fix succeeded`);
-              if (config.hasTelegram) {
-                await sendTelegram(`\u{1F493} Steven fixed ${floor.name} automatically`);
-              }
             } else {
               console.log(`[Heartbeat] Fix failed: ${floor.name}`);
               addLog(goal.id, floor.id, 'Steven', `Heartbeat: auto-fix failed — ${result.summary || 'no details'}`);
@@ -105,7 +126,6 @@ async function heartbeatCycle() {
         // ── Building floors: stall detection ──
         if (floor.status === 'building') {
           const floorCreatedAt = (floor.created_at || 0) * 1000;
-          // Use last state check or floor creation time as reference
           const reference = lastChecked || floorCreatedAt;
           const elapsed = now - reference;
 
@@ -114,10 +134,6 @@ async function heartbeatCycle() {
             const msg = `Floor "${floor.name}" has not progressed in ${stallMinutes} minutes`;
             console.warn(`[Heartbeat] STALL: ${msg}`);
             addLog(goal.id, floor.id, 'Steven', `Heartbeat stall warning: ${msg}`);
-
-            if (config.hasTelegram) {
-              await sendTelegram(`\u26A0\uFE0F *Stall Warning*\n${msg}\nGoal: ${goal.text.substring(0, 60)}`);
-            }
 
             state[stateKey].lastStallWarning = now;
           }
@@ -138,8 +154,9 @@ function startHeartbeat() {
     console.log('[Heartbeat] Already running');
     return;
   }
-  console.log(`[Heartbeat] Steven monitor started (interval: ${INTERVAL_MS / 1000}s)`);
+  console.log(`[Heartbeat] Steven monitor started (interval: ${INTERVAL_MS / 1000}s, summary: every ${SUMMARY_INTERVAL_MS / 3600000}h)`);
   heartbeatTimer = setInterval(heartbeatCycle, INTERVAL_MS);
+  summaryTimer = setInterval(sendStevenSummary, SUMMARY_INTERVAL_MS);
   // Run first check after a short delay to let the server finish booting
   setTimeout(heartbeatCycle, 10000);
 }
@@ -148,8 +165,12 @@ function stopHeartbeat() {
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer);
     heartbeatTimer = null;
-    console.log('[Heartbeat] Steven monitor stopped');
   }
+  if (summaryTimer) {
+    clearInterval(summaryTimer);
+    summaryTimer = null;
+  }
+  console.log('[Heartbeat] Steven monitor stopped');
 }
 
 module.exports = { startHeartbeat, stopHeartbeat };

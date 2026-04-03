@@ -10,6 +10,9 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchStatus();
   fetchGoals();
   fetchUserModel();
+  loadWebChatHistory().then(function() {
+    fetchTelegramMessages().then(function(tgMsgs) { renderChat(tgMsgs || []); });
+  });
   bindEvents();
   startAutoRefresh();
 });
@@ -55,6 +58,18 @@ function showToast(message, type) {
   toast.textContent = message;
   container.appendChild(toast);
   setTimeout(() => { toast.remove(); }, 4000);
+}
+
+// ── Persistent web chat history ──
+async function loadWebChatHistory() {
+  try {
+    var msgs = await api('/api/chat-messages');
+    if (msgs && msgs.length) {
+      chatHistory = msgs.map(function(m) { return { role: m.role, content: m.content }; });
+    }
+  } catch (_) {
+    // Chat history not available — start fresh
+  }
 }
 
 // ── Status ──
@@ -216,7 +231,23 @@ function renderGoalDetail(goal) {
 
   var floorsHtml = goal.floors.map(function(f, i) {
     var isActive = ['researching', 'building', 'auditing', 'reviewing'].indexOf(f.status) !== -1;
-    var spinnerHtml = isActive ? ' <span class="spinner"></span>' : '';
+
+    // Humorous worker badge for active floors
+    var workerBadgeHtml = '';
+    if (isActive) {
+      var workers = {
+        researching: { name: 'Alba', phases: ['researching...', 'scanning...', 'ooh shiny...', 'reading...', 'googling...'] },
+        building:    { name: 'David', phases: ['coding...', 'compiling...', 'bugs? surely not...', 'refactoring...', 'shipping...'] },
+        auditing:    { name: 'Vex', phases: ['auditing...', 'nitpicking...', 'scoring...', 'verifying...', 'score!'] },
+        reviewing:   { name: 'Elira', phases: ['reviewing...', 'judging...', 'hmm...', 'approved?', 'perfect'] },
+      };
+      var w = workers[f.status] || { name: 'Hermes', phases: ['thinking...', 'planning...', 'reasoning...', 'deciding...'] };
+      workerBadgeHtml = '<span class="worker-badge ' + f.status + '" data-worker="' + w.name + '" data-phases="' + w.phases.join('|') + '">' +
+        '<span class="worker-name">' + w.name + ' </span>' +
+        '<span class="worker-phase">' + w.phases[0] + '</span>' +
+        ' <span class="worker-dots"><span class="dot">.</span><span class="dot">.</span></span>' +
+        '</span>';
+    }
 
     // Agent badges based on what has run
     var agents = [];
@@ -252,7 +283,7 @@ function renderGoalDetail(goal) {
     return (i > 0 ? '<div class="connector"></div>' : '') +
       '<div class="floor-card ' + f.status + '" data-floor-id="' + f.id + '">' +
         '<div class="floor-header">' +
-          '<span class="floor-name">' + esc(f.name) + spinnerHtml + '</span>' +
+          '<span class="floor-name">' + esc(f.name) + workerBadgeHtml + '</span>' +
           '<div class="floor-right">' +
             iterHtml +
             '<span class="badge ' + f.status + '">' + f.status + '</span>' +
@@ -274,7 +305,10 @@ function renderGoalDetail(goal) {
 
   el.innerHTML =
     '<div class="goal-header">' +
-      '<h2>' + esc(goal.text) + '</h2>' +
+      '<div class="goal-header-top">' +
+        '<h2>' + esc(goal.text) + '</h2>' +
+        '<button class="btn-delete" id="delete-goal-btn" data-id="' + goal.id + '" title="Delete this goal">Delete</button>' +
+      '</div>' +
       '<div class="meta">' +
         '<span class="badge ' + goal.status + '">' + goal.status.replace('_', ' ') + '</span>' +
         '<span>' + goal.floors.length + ' floors</span>' +
@@ -299,6 +333,16 @@ function renderGoalDetail(goal) {
       triggerFix(btn.dataset.floorId);
     });
   });
+
+  // Bind delete button
+  var deleteBtn = document.getElementById('delete-goal-btn');
+  if (deleteBtn) {
+    deleteBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var goalId = deleteBtn.dataset.id;
+      showDeleteConfirm(goalId, goal.text);
+    });
+  }
 }
 
 function renderVexBar(label, score) {
@@ -362,6 +406,52 @@ async function triggerFix(floorId) {
     await api('/api/floors/' + floorId + '/fix', { method: 'POST', body: {} });
   } catch (err) {
     showToast('Fix failed: ' + err.message, 'error');
+  }
+}
+
+// ── Delete goal ──
+function showDeleteConfirm(goalId, goalText) {
+  // Remove existing overlay if any
+  var existing = document.getElementById('delete-overlay');
+  if (existing) existing.remove();
+
+  var overlay = document.createElement('div');
+  overlay.id = 'delete-overlay';
+  overlay.className = 'delete-overlay';
+  overlay.innerHTML =
+    '<div class="delete-modal">' +
+      '<h3>Delete this goal?</h3>' +
+      '<p class="delete-goal-text">"' + esc(goalText.substring(0, 80)) + '"</p>' +
+      '<p class="delete-warning">This permanently removes the goal, all floors, logs, and workspace files.</p>' +
+      '<div class="delete-actions">' +
+        '<button class="btn-delete-cancel" id="delete-cancel">Cancel</button>' +
+        '<button class="btn-delete-confirm" id="delete-confirm">Delete</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+
+  document.getElementById('delete-cancel').addEventListener('click', function() {
+    overlay.remove();
+  });
+  overlay.addEventListener('click', function(e) {
+    if (e.target === overlay) overlay.remove();
+  });
+  document.getElementById('delete-confirm').addEventListener('click', function() {
+    overlay.remove();
+    performDelete(goalId);
+  });
+}
+
+async function performDelete(goalId) {
+  try {
+    await api('/api/goals/' + goalId, { method: 'DELETE' });
+    showToast('Goal deleted', 'success');
+    selectedGoalId = null;
+    document.getElementById('goal-detail').innerHTML =
+      '<div class="empty"><h3>Goal deleted</h3><p>Select or create a new goal</p></div>';
+    fetchGoals();
+  } catch (err) {
+    showToast('Delete failed: ' + err.message, 'error');
   }
 }
 
@@ -518,6 +608,68 @@ function highlightJSON(code) {
 }
 
 // ── Chat ──
+let lastTgMsgId = 0;
+
+async function fetchTelegramMessages() {
+  try {
+    var tgMsgs = await api('/api/telegram-messages?limit=100');
+    if (!tgMsgs || !tgMsgs.length) return;
+    lastTgMsgId = tgMsgs[tgMsgs.length - 1].id;
+    return tgMsgs;
+  } catch (e) {
+    return [];
+  }
+}
+
+function renderChat(tgMsgs) {
+  var el = document.getElementById('chat-messages');
+
+  // Build a map of Telegram message signatures to detect web duplicates
+  var tgSigSet = {};
+  if (tgMsgs) {
+    tgMsgs.forEach(function(m) {
+      tgSigSet[m.role + '|' + m.content.substring(0, 50)] = true;
+    });
+  }
+
+  // Telegram messages (newer ones from polling, not yet in chatHistory)
+  var tgHtml = '';
+  if (tgMsgs) {
+    tgMsgs.forEach(function(m) {
+      var sig = m.role + '|' + m.content.substring(0, 50);
+      // Skip if this exact message is already in chatHistory (mirrored from web send)
+      if (chatHistory.some(function(h) { return h.role + '|' + h.content.substring(0, 50) === sig; })) return;
+      var badge = '<span class="mode-tag tg">Telegram</span>';
+      if (m.role === 'assistant') {
+        var lower = m.content.toLowerCase();
+        var modeTag = lower.indexOf('steven') !== -1 || lower.indexOf('fix') !== -1 || lower.indexOf('patch') !== -1
+          ? '<span class="mode-tag steven">Steven mode</span>'
+          : '<span class="mode-tag elira">Elira mode</span>';
+        tgHtml += '<div class="chat-msg assistant">' + badge + modeTag + esc(m.content) + '</div>';
+      } else {
+        tgHtml += '<div class="chat-msg user">' + badge + esc(m.content) + '</div>';
+      }
+    });
+  }
+
+  // Web chat session messages
+  var webHtml = chatHistory.map(function(m) {
+    if (m.role === 'assistant') {
+      var lower = m.content.toLowerCase();
+      var modeTag = lower.indexOf('steven') !== -1 || lower.indexOf('fix') !== -1 || lower.indexOf('patch') !== -1
+        ? '<span class="mode-tag steven">Steven mode</span>'
+        : '<span class="mode-tag elira">Elira mode</span>';
+      return '<div class="chat-msg assistant">' + modeTag + esc(m.content) + '</div>';
+    }
+    return '<div class="chat-msg user">' + esc(m.content) + '</div>';
+  }).join('');
+
+  el.innerHTML = tgHtml + webHtml;
+  requestAnimationFrame(function() {
+    el.scrollTop = el.scrollHeight;
+  });
+}
+
 async function sendChat() {
   var input = document.getElementById('chat-input');
   var text = input.value.trim();
@@ -525,37 +677,18 @@ async function sendChat() {
   input.value = '';
 
   chatHistory.push({ role: 'user', content: text });
-  renderChat();
+  renderChat([]);
 
   try {
     var data = await api('/api/chat', {
       method: 'POST',
-      body: { messages: chatHistory, goalId: currentGoalId || null },
+      body: { messages: chatHistory, goalId: selectedGoalId || null },
     });
     chatHistory.push({ role: 'assistant', content: data.reply });
   } catch (e) {
     chatHistory.push({ role: 'assistant', content: 'Error: ' + e.message });
   }
-  renderChat();
-}
-
-function renderChat() {
-  var el = document.getElementById('chat-messages');
-  el.innerHTML = chatHistory.map(function(m) {
-    if (m.role === 'assistant') {
-      // Detect mode from content
-      var lower = m.content.toLowerCase();
-      var modeTag = '';
-      if (lower.indexOf('steven') !== -1 || lower.indexOf('fix') !== -1 || lower.indexOf('debug') !== -1 || lower.indexOf('patch') !== -1) {
-        modeTag = '<span class="mode-tag steven">Steven mode</span>';
-      } else {
-        modeTag = '<span class="mode-tag elira">Elira mode</span>';
-      }
-      return '<div class="chat-msg assistant">' + modeTag + esc(m.content) + '</div>';
-    }
-    return '<div class="chat-msg user">' + esc(m.content) + '</div>';
-  }).join('');
-  el.scrollTop = el.scrollHeight;
+  renderChat([]);
 }
 
 // ── Logs ──
@@ -661,6 +794,13 @@ function startAutoRefresh() {
   setInterval(function() {
     if (selectedGoalId) fetchLogs();
   }, 3000);
+
+  // Telegram messages every 4 seconds
+  setInterval(function() {
+    fetchTelegramMessages().then(function(tgMsgs) {
+      if (tgMsgs) renderChat(tgMsgs);
+    });
+  }, 4000);
 }
 
 // ── Utilities ──

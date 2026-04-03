@@ -1,6 +1,7 @@
 const { config } = require('./config');
+const settings = require('./settings');
 
-// When true, per-floor notifications are suppressed — only final summary sends
+// When true, per-floor notifications are suppressed during a build run
 let silentMode = false;
 function setSilent(val) { silentMode = val; }
 
@@ -14,7 +15,6 @@ async function sendTelegram(text) {
       body: JSON.stringify({ chat_id: config.telegramChatId, text, parse_mode: 'Markdown' }),
     });
     if (!res.ok) {
-      // Fallback: retry without markdown
       await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -28,20 +28,29 @@ async function sendTelegram(text) {
 
 async function notifyFloorLive(goalText, floorName) {
   if (silentMode) return;
+  const s = settings.get();
+  if (!s.notifications.floorLive) return;
   await sendTelegram(`✅ *Floor Live* — ${floorName}\n_${goalText.substring(0, 60)}_`);
 }
 
 async function notifyFloorBlocked(goalText, floorName, reason) {
   if (silentMode) return;
+  const s = settings.get();
+  if (!s.notifications.floorBlocked) return;
   await sendTelegram(`⚠️ *Blocked* — ${floorName}\n${reason}`);
 }
 
 async function notifyGoalComplete(goalText) {
+  const s = settings.get();
+  if (!s.notifications.buildComplete) return;
   await sendTelegram(`🎉 *Goal Complete*\n"${goalText.substring(0, 80)}"\n\nAll floors live.`);
 }
 
 async function notifyStevenAlert(floorName, issue) {
+  const s = settings.get();
+  if (!s.notifications.stevenAlerts) return;
   await sendTelegram(`🔧 *Steven* — ${floorName}\n${issue.substring(0, 200)}`);
 }
 
 module.exports = { sendTelegram, notifyFloorLive, notifyFloorBlocked, notifyGoalComplete, notifyStevenAlert, setSilent };
+

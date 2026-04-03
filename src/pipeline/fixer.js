@@ -133,7 +133,7 @@ async function stevenMonitor() {
           const fixResult = await stevenFix(floor, goal, assessment);
           if (fixResult.fixed && fixResult.patches.length > 0) {
             // Only notify if patches were actually applied
-            await sendTelegram(`🔧 *Steven fixed* ${floor.name} — ${fixResult.patches.length} patch(es) applied`);
+            await notifyStevenAlert(floor.name, `${fixResult.patches.length} patch(es) applied`);
           }
         }
       } catch (floorErr) {

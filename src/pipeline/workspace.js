@@ -118,4 +118,13 @@ function rollbackWorkspace(goalId) {
   return true;
 }
 
-module.exports = { ensureGoalDir, writeFile, readFile, listFiles, getWorkspacePath, readAllFiles, getWorkspaceSummary, rollbackWorkspace };
+function deleteWorkspace(goalId) {
+  const dir = path.join(WORKSPACES_DIR, goalId);
+  if (fs.existsSync(dir)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    return true;
+  }
+  return false;
+}
+
+module.exports = { ensureGoalDir, writeFile, readFile, listFiles, getWorkspacePath, readAllFiles, getWorkspaceSummary, rollbackWorkspace, deleteWorkspace };

@@ -169,20 +169,20 @@ function buildDigestHtml(data) {
   return `<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><style>
-  body { font-family: -apple-system, sans-serif; max-width: 680px; margin: 0 auto; color: #1a1a2e; }
-  .header { background: linear-gradient(135deg, #1a1a2e, #00d4ff22); padding: 32px; border-bottom: 2px solid #00d4ff; }
-  .header h1 { margin: 0; font-size: 22px; color: #00d4ff; }
+  body { font-family: -apple-system, sans-serif; max-width: 680px; margin: 0 auto; color: #222221; }
+  .header { background: linear-gradient(135deg, #111110, #ffc53d22); padding: 32px; border-bottom: 2px solid #ffc53d; }
+  .header h1 { margin: 0; font-size: 22px; color: #ffc53d; }
   .header p { margin: 4px 0 0; color: #666; font-size: 13px; }
   .section { padding: 24px 32px; border-bottom: 1px solid #eee; }
   .section h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 1px; color: #666; margin: 0 0 16px; }
-  .summary { background: #f8f9ff; border-left: 3px solid #00d4ff; padding: 16px; border-radius: 0 8px 8px 0; line-height: 1.6; }
+  .summary { background: #fffbf0; border-left: 3px solid #ffc53d; padding: 16px; border-radius: 0 8px 8px 0; line-height: 1.6; }
   .repo { padding: 10px 0; border-bottom: 1px solid #f0f0f0; }
   .repo:last-child { border: none; }
-  .repo-name { font-weight: 600; color: #1a1a2e; text-decoration: none; }
+  .repo-name { font-weight: 600; color: #222221; text-decoration: none; }
   .repo-meta { font-size: 12px; color: #888; margin-top: 2px; }
   .article { padding: 10px 0; border-bottom: 1px solid #f0f0f0; }
   .article:last-child { border: none; }
-  .article a { color: #1a1a2e; text-decoration: none; font-weight: 500; }
+  .article a { color: #222221; text-decoration: none; font-weight: 500; }
   .article-meta { font-size: 12px; color: #888; margin-top: 2px; }
   .footer { padding: 24px 32px; font-size: 12px; color: #999; text-align: center; }
 </style></head>
