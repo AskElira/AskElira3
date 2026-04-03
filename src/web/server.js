@@ -452,7 +452,21 @@ async function handleTelegramMessage(userText) {
     if (!incompleteGoals.length) {
       return tgReply('No incomplete goals to resume. Say "build [idea]" to start something new.');
     }
-    const target = incompleteGoals[0];
+
+    // Try to match from classifier's resolved_target or recent conversation context
+    let target = null;
+    const resolvedName = (classification.resolved_target || '').toLowerCase();
+    if (resolvedName) {
+      target = incompleteGoals.find(g => g.text.toLowerCase().includes(resolvedName));
+    }
+    // Fallback: check recent conversation for a goal name mentioned
+    if (!target && recentMessages.length > 0) {
+      const recentText = recentMessages.slice(-6).map(m => m.content).join(' ').toLowerCase();
+      target = incompleteGoals.find(g => recentText.includes(g.text.substring(0, 30).toLowerCase()));
+    }
+    // Last resort: newest incomplete goal
+    if (!target) target = incompleteGoals[0];
+
     const floors = listFloors(target.id);
     const live = floors.filter(f => f.status === 'live').length;
     const blocked = floors.filter(f => f.status === 'blocked').length;

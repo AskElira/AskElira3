@@ -106,7 +106,7 @@ function stripThinking(text) {
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
     .replace(/TOOL_CALL[\s\S]*?\[\/TOOLCALL\]/gi, '')
     .replace(/\[TOOL_CALL\][\s\S]*?\[\/TOOL_CALL\]/gi, '')
-    .replace(/<minimax:toolcall>[\s\S]*?<\/minimax:toolcall>/gi, '')
+    .replace(/<minimax:tool_?call>[\s\S]*?<\/minimax:tool_?call>/gi, '')
     .replace(/```tool[\s\S]*?```/gi, '')
     .trim();
   // Unwrap <answer>...</answer> — some models wrap final output in this tag
