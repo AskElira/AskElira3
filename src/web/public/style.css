@@ -46,6 +46,11 @@ body {
   height: 100vh;
 }
 
+.header { grid-column: 1 / -1; grid-row: 1; }
+.sidebar { grid-column: 1; grid-row: 2; }
+.main { grid-column: 2; grid-row: 2; }
+.sidebar-overlay { position: fixed; }
+
 /* Header */
 .header {
   grid-column: 1 / -1;
