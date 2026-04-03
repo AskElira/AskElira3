@@ -212,10 +212,10 @@ Available intents:
 - fix: Fix a blocked floor (trigger Steven).
 - digest: Send the daily email digest now.
 - files: Show workspace files.
-- notifications: View or change notification settings.
-- steven_summary: Check what Steven has been doing recently.
+- notifications: View or change notification settings. Includes: stop/mute/silence/disable/enable alerts, change what gets notified, "stop Steven notifications", "mute floor alerts", "silence", etc.
+- steven_summary: Check what Steven has been doing recently (activity, history, log).
 - chat: General conversation, question, or anything that isn't a specific action.
-- ambiguous: Intent is genuinely unclear — could be multiple things.
+- ambiguous: Intent is genuinely unclear — could be multiple things. Use sparingly — prefer "chat" when in doubt.
 
 CRITICAL RULES:
 - If user says "build it", "do it", "make that", "yes build that" — resolve what "it"/"that" refers to from the recent conversation or suggestions. Return intent "build" with the RESOLVED target, not the pronoun.
@@ -416,10 +416,15 @@ async function handleTelegramMessage(userText) {
   const classification = await classifyIntent(userText, recentMessages);
   console.log(`[Intent] "${userText.substring(0, 40)}" → ${classification.intent} (${classification.confidence}) target="${classification.resolved_target?.substring(0, 40) || ''}"`);
 
-  // ── Disambiguation: ask if intent is unclear ──
-  if (classification.intent === 'ambiguous' || classification.confidence < 0.5) {
+  // ── Disambiguation: only ask if genuinely ambiguous with very low confidence ──
+  // At medium confidence, fall through to chat instead of blocking with "I'm not sure"
+  if (classification.intent === 'ambiguous' && classification.confidence < 0.4) {
     const question = classification.resolved_target || "I'm not sure what you'd like me to do. Could you be more specific?";
     return tgReply(`🤔 ${question}`);
+  }
+  // Reclassify low-confidence non-ambiguous intents as chat to avoid wrong routing
+  if (classification.confidence < 0.3 && classification.intent !== 'chat') {
+    classification.intent = 'chat';
   }
 
   // ── Route by intent ──
@@ -550,22 +555,25 @@ async function handleTelegramMessage(userText) {
     var on  = / on\b| enable/i.test(lower);
     var off = / off\b| disable/i.test(lower);
 
-    if (/floor.*(on|off|enable|disable)|(enable|disable).*floor/i.test(lower)) {
-      if (on)  { settings.update({ notifications: { ...n, floorLive: true, floorBlocked: true } }); changed = 'Floor notifications ON'; }
-      if (off) { settings.update({ notifications: { ...n, floorLive: false, floorBlocked: false } }); changed = 'Floor notifications OFF'; }
+    // Steven-specific MUST come before the catch-all "stop.*notif" so
+    // "stop Steven fixing notifications" hits this, not "silence all"
+    if (/steven.*(off|on|stop|disable|enable|mute|silence)|(off|on|stop|disable|enable|mute|silence).*steven/i.test(lower)) {
+      var stOn = /steven.*(on|enable)|(on|enable).*steven/i.test(lower);
+      settings.update({ notifications: { ...n, stevenAlerts: !!stOn } });
+      changed = stOn ? 'Steven alerts enabled.' : 'Steven alerts disabled.';
+    } else if (/floor.*(on|off|enable|disable|stop|mute)|(enable|disable|stop|mute).*floor/i.test(lower)) {
+      var flOn = /floor.*(on|enable)|(on|enable).*floor/i.test(lower);
+      if (flOn) { settings.update({ notifications: { ...n, floorLive: true, floorBlocked: true } }); changed = 'Floor notifications ON'; }
+      else      { settings.update({ notifications: { ...n, floorLive: false, floorBlocked: false } }); changed = 'Floor notifications OFF'; }
     } else if (/only.*build|build.*only/i.test(lower)) {
       settings.update({ notifications: { floorLive: false, floorBlocked: false, buildComplete: true, stevenAlerts: false } });
       changed = 'Only build-complete notifications ON';
-    } else if (/stop.*notif|silence|shut up|no.*notif|mute/i.test(lower)) {
+    } else if (/stop.*notif|silence.*notif|shut up|no.*notif|mute.*notif/i.test(lower)) {
       settings.update({ notifications: { floorLive: false, floorBlocked: false, buildComplete: false, stevenAlerts: false } });
       changed = 'All notifications silenced.';
     } else if (/all.*notif|everything|enable.*notif|turn.*on/i.test(lower)) {
       settings.update({ notifications: { floorLive: true, floorBlocked: true, buildComplete: true, stevenAlerts: true } });
       changed = 'All notifications ON';
-    } else if (/steven.*(off|on)|(off|on).*steven/i.test(lower)) {
-      var stOn = /steven.*\bon\b|\bon\b.*steven/i.test(lower);
-      settings.update({ notifications: { ...n, stevenAlerts: !!stOn } });
-      changed = stOn ? 'Steven alerts enabled.' : 'Steven alerts disabled.';
     }
 
     if (changed) return tgReply('✅ ' + changed);
