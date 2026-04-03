@@ -13,6 +13,9 @@
     <!-- Header -->
     <header class="header">
       <div class="header-left">
+        <button class="hamburger" id="hamburger-btn" aria-label="Toggle sidebar">
+          <span></span><span></span><span></span>
+        </button>
         <h1>AskElira <span class="h-elira">3</span></h1>
         <span class="hermes-indicator elira-mode" id="hermes-mode">Hermes</span>
       </div>
@@ -32,8 +35,11 @@
       </div>
     </header>
 
+    <!-- Sidebar overlay for mobile -->
+    <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
     <!-- Sidebar -->
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
       <h2>Goals</h2>
       <div class="goal-list-items" id="goal-list"></div>
       <div class="new-goal-btn" id="new-goal-btn">+ New Goal</div>
@@ -53,21 +59,20 @@
 
     <!-- Main Content -->
     <main class="main">
-      <!-- Input -->
-      <div class="input-area" id="input-area">
-        <textarea id="goal-input" placeholder="Describe what you want to build..." rows="2"></textarea>
-        <button class="btn" id="build-btn">Build</button>
-      </div>
-
       <!-- Tabs -->
       <div class="tabs">
-        <button class="tab active" data-tab="building">Building</button>
+        <button class="tab active" data-tab="overview">Overview</button>
+        <button class="tab" data-tab="building">Building</button>
         <button class="tab" data-tab="workspace">Workspace</button>
-        <button class="tab" data-tab="chat">Chat</button>
+      </div>
+
+      <!-- Tab: Overview -->
+      <div id="tab-overview" class="tab-content">
+        <div id="overview-content"></div>
       </div>
 
       <!-- Tab: Building -->
-      <div id="tab-building" class="tab-content">
+      <div id="tab-building" class="tab-content" style="display:none">
         <div id="goal-detail"></div>
       </div>
 
@@ -76,17 +81,76 @@
         <div id="workspace-content"></div>
       </div>
 
-      <!-- Tab: Chat -->
-      <div id="tab-chat" class="tab-content" style="display:none">
-        <div class="chat-area">
-          <div class="chat-messages" id="chat-messages"></div>
-          <div class="chat-input">
-            <input type="text" id="chat-input" placeholder="Chat with Hermes..." autocomplete="off">
-            <button class="btn" id="chat-send">Send</button>
+    </main>
+
+    <!-- Floating AI Chat Widget -->
+    <div class="chat-widget" id="chat-widget">
+      <!-- Expanded chat window -->
+      <div class="chat-window" id="chat-window">
+        <div class="chat-window-header">
+          <div class="chat-window-title">
+            <div class="chat-avatar">E</div>
+            <div>
+              <strong>Elira</strong>
+              <span class="chat-window-status" id="chat-status">Online</span>
+            </div>
           </div>
+          <button class="chat-window-close" id="chat-minimize" aria-label="Minimize">&minus;</button>
+        </div>
+        <div class="chat-messages" id="chat-messages"></div>
+        <div class="chat-window-input">
+          <textarea id="chat-input" placeholder="Ask anything or say &quot;build a...&quot;" rows="1" autocomplete="off"></textarea>
+          <button class="chat-window-send" id="chat-send" aria-label="Send">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>
+          </button>
         </div>
       </div>
-    </main>
+      <!-- Chat bubble (visible when minimized) -->
+      <button class="chat-bubble" id="chat-bubble" aria-label="Chat with Elira">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span class="chat-bubble-badge" id="chat-badge" style="display:none"></span>
+      </button>
+    </div>
+
+    <!-- Tutorial overlay (first visit) -->
+    <div class="tutorial-overlay" id="tutorial-overlay" style="display:none">
+      <div class="tutorial-modal">
+        <div class="tutorial-header">
+          <h2>Welcome to AskElira <span style="color:var(--accent)">3</span></h2>
+          <p>Your AI build team. Just talk.</p>
+        </div>
+        <div class="tutorial-body">
+          <div class="tutorial-step">
+            <span class="tutorial-icon">1</span>
+            <div>
+              <strong>Tell Hermes what to build</strong>
+              <p>Type naturally: "Build a REST API for a todo app" or "Create a landing page with dark mode"</p>
+            </div>
+          </div>
+          <div class="tutorial-step">
+            <span class="tutorial-icon">2</span>
+            <div>
+              <strong>Watch 5 agents work</strong>
+              <p>Alba researches, David codes, Vex validates, Elira approves, Steven fixes — all automatically</p>
+            </div>
+          </div>
+          <div class="tutorial-step">
+            <span class="tutorial-icon">3</span>
+            <div>
+              <strong>Get your code</strong>
+              <p>Working files appear in the Workspace tab. Ask questions, request changes, or start another build.</p>
+            </div>
+          </div>
+          <div class="tutorial-examples">
+            <p class="tutorial-examples-label">Try saying:</p>
+            <button class="tutorial-example" data-text="Build a real-time weather dashboard with location search">Build a weather dashboard</button>
+            <button class="tutorial-example" data-text="Create a Python web scraper that monitors competitor prices">Price monitoring scraper</button>
+            <button class="tutorial-example" data-text="Build a Telegram bot that summarizes news articles">News summary bot</button>
+          </div>
+        </div>
+        <button class="btn tutorial-start" id="tutorial-dismiss">Got it, let's go</button>
+      </div>
+    </div>
 
     <!-- Log Stream -->
     <div class="log-stream" id="log-stream">

@@ -442,7 +442,11 @@ router.get('/api/stats/circuits', (req, res) => {
 router.get('/api/status', (req, res) => {
   try {
     const goals = listGoals();
-    const totalFloors = goals.reduce((acc, g) => acc + listFloors(g.id).length, 0);
+    const allFloors = goals.reduce((acc, g) => acc.concat(listFloors(g.id)), []);
+    const totalFloors = allFloors.length;
+    const floorsLive = allFloors.filter(f => f.status === 'live').length;
+    const floorsBlocked = allFloors.filter(f => f.status === 'blocked').length;
+    const floorsActive = allFloors.filter(f => ['researching', 'building', 'auditing', 'reviewing'].includes(f.status)).length;
     const { getUsageSummary } = require('../llm');
     const usage = getUsageSummary();
     res.json({
@@ -457,6 +461,9 @@ router.get('/api/status', (req, res) => {
       version: '3.0.0',
       goalCount: goals.length,
       floorCount: totalFloors,
+      floorsLive,
+      floorsBlocked,
+      floorsActive,
       hermesMode: 'unified',
       llmBudgetPct: usage.budgetPct,
       llmTotalCalls: usage.calls,

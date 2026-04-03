@@ -131,4 +131,42 @@ function summarizeResults(results) {
   ).join('\n');
 }
 
-module.exports = { run, autoInstall, runCommands, parseCommands, summarizeResults };
+/**
+ * Run a command using execFile directly with pre-split args.
+ * Unlike run(), this handles filenames with spaces correctly
+ * because args are passed as an array, not split on whitespace.
+ */
+function runExecFile(cmd, args, { cwd = process.cwd(), timeout = TIMEOUT_MS } = {}) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const command = `${cmd} ${args.join(' ')}`;
+
+    if (!ALLOWED_COMMANDS.includes(cmd)) {
+      return resolve({ success: false, stdout: '', stderr: `Command not allowed: ${cmd}`, command, duration: 0, exitCode: 1 });
+    }
+
+    console.log(`[Executor] Running: ${command} (cwd: ${cwd})`);
+
+    execFile(cmd, args, { cwd, timeout, maxBuffer: 1024 * 1024 * 5 }, (err, stdout, stderr) => {
+      const duration = Date.now() - start;
+      const stderrStr = stderr?.trim() || '';
+      const hardFail = err && err.code !== 0 && (
+        stderrStr.includes('ERROR:') ||
+        stderrStr.includes('error:') ||
+        stderrStr.includes('command not found') ||
+        stderrStr.includes('No module named') ||
+        (!stdout && !stderrStr)
+      );
+      resolve({
+        success: !hardFail,
+        stdout: stdout?.trim() || '',
+        stderr: stderrStr,
+        command,
+        duration,
+        exitCode: err?.code || 0,
+      });
+    });
+  });
+}
+
+module.exports = { run, runExecFile, autoInstall, runCommands, parseCommands, summarizeResults };

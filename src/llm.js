@@ -171,7 +171,7 @@ async function anthropicChat(messages, { model, system, maxTokens, goalId, floor
   };
   if (system) body.system = system;
 
-  const res = await withRetry(() => fetchWithTimeout(url, {
+  const data = await withRetry(() => fetchWithTimeout(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -184,10 +184,8 @@ async function anthropicChat(messages, { model, system, maxTokens, goalId, floor
       const errText = await r.text();
       throw new Error(`Anthropic API error ${r.status}: ${errText}`);
     }
-    return r;
+    return r.json();
   }));
-
-  const data = await res.json();
   if (!data.content || !data.content.length) {
     throw new Error('Anthropic returned empty content');
   }
@@ -222,7 +220,7 @@ async function openaiChat(messages, { model, system, maxTokens, goalId, floorId,
     messages: allMessages,
   };
 
-  const res = await withRetry(() => fetchWithTimeout(url, {
+  const data = await withRetry(() => fetchWithTimeout(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -234,10 +232,8 @@ async function openaiChat(messages, { model, system, maxTokens, goalId, floorId,
       const errText = await r.text();
       throw new Error(`OpenAI API error ${r.status}: ${errText}`);
     }
-    return r;
+    return r.json();
   }));
-
-  const data = await res.json();
   if (!data.choices || !data.choices.length) {
     throw new Error('OpenAI returned empty choices');
   }

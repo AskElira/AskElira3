@@ -148,6 +148,7 @@ function deleteGoal(id) {
   const goal = getGoal(id);
   if (!goal) return null;
   const del = db.transaction(() => {
+    db.prepare('DELETE FROM metrics WHERE goal_id = ?').run(id);
     db.prepare('DELETE FROM llm_calls WHERE goal_id = ?').run(id);
     db.prepare('DELETE FROM logs WHERE goal_id = ?').run(id);
     db.prepare('DELETE FROM floors WHERE goal_id = ?').run(id);

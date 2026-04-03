@@ -10,11 +10,13 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchStatus();
   fetchGoals();
   fetchUserModel();
+  fetchOverview();
   loadWebChatHistory().then(function() {
     fetchTelegramMessages().then(function(tgMsgs) { renderChat(tgMsgs || []); });
   });
   bindEvents();
   startAutoRefresh();
+  showTutorialIfFirstVisit();
 });
 
 // ── API helpers ──
@@ -52,12 +54,17 @@ async function apiText(path) {
 // ── Toast notifications ──
 function showToast(message, type) {
   type = type || 'info';
-  const container = document.getElementById('toast-container');
-  const toast = document.createElement('div');
+  var container = document.getElementById('toast-container');
+  var toast = document.createElement('div');
   toast.className = 'toast ' + type;
   toast.textContent = message;
   container.appendChild(toast);
-  setTimeout(() => { toast.remove(); }, 4000);
+  setTimeout(function() {
+    toast.classList.add('toast-exit');
+    toast.addEventListener('animationend', function() { toast.remove(); });
+    // Fallback removal in case animationend doesn't fire
+    setTimeout(function() { if (toast.parentNode) toast.remove(); }, 500);
+  }, 3500);
 }
 
 // ── Persistent web chat history ──
@@ -172,12 +179,22 @@ function renderGoalList(goals) {
   }
   el.innerHTML = goals.map(function(g) {
     var floorInfo = g.floorCount > 0 ? g.floorsLive + '/' + g.floorCount : '';
+    var pct = g.floorCount > 0 ? Math.round(g.floorsLive / g.floorCount * 100) : 0;
+    var barColor = 'green';
+    if (g.floorsBlocked > 0) barColor = 'red';
+    else if (g.status === 'building' && pct < 100) barColor = 'amber';
+
+    var progressBar = g.floorCount > 0
+      ? '<div class="goal-progress-bar"><div class="goal-progress-fill ' + barColor + '" style="width:' + pct + '%"></div></div>'
+      : '';
+
     return '<div class="goal-item ' + (g.id === selectedGoalId ? 'active' : '') + '" data-id="' + g.id + '">' +
       '<span class="goal-text">' + esc(g.text) + '</span>' +
       '<div class="goal-meta">' +
         '<span class="badge ' + g.status + '">' + g.status.replace('_', ' ') + '</span>' +
         (floorInfo ? '<span class="floor-progress">' + floorInfo + ' floors</span>' : '') +
       '</div>' +
+      progressBar +
     '</div>';
   }).join('');
 
@@ -192,11 +209,20 @@ function selectGoal(id) {
   fetchGoalDetail(id);
   fetchGoals();
   switchTab('building');
+  // Close mobile sidebar
+  closeMobileSidebar();
 }
+
+var cachedMetrics = null;
 
 async function fetchGoalDetail(id) {
   try {
-    var data = await api('/api/goals/' + id);
+    var results = await Promise.all([
+      api('/api/goals/' + id),
+      api('/api/stats/metrics').catch(function() { return null; })
+    ]);
+    var data = results[0];
+    cachedMetrics = results[1];
     renderGoalDetail(data);
     checkFloorStatusChanges(data.floors);
   } catch (err) {
@@ -280,6 +306,12 @@ function renderGoalDetail(goal) {
     // Iteration info
     var iterHtml = f.iteration > 0 ? '<span class="floor-iter">iter ' + f.iteration + '/3</span>' : '';
 
+    // Floor timeline (only show for floors that have some progress)
+    var timelineHtml = '';
+    if (f.status !== 'pending' && cachedMetrics) {
+      timelineHtml = renderFloorTimeline(f, cachedMetrics);
+    }
+
     return (i > 0 ? '<div class="connector"></div>' : '') +
       '<div class="floor-card ' + f.status + '" data-floor-id="' + f.id + '">' +
         '<div class="floor-header">' +
@@ -293,6 +325,7 @@ function renderGoalDetail(goal) {
         '<div class="floor-desc">' + esc(f.description || '') + '</div>' +
         '<div class="floor-agents">' + agentBadgesHtml + '</div>' +
         vexHtml +
+        timelineHtml +
         fixBtnHtml +
         '<div class="floor-detail" id="floor-detail-' + f.id + '">' +
           renderFloorDetailSections(f, goal) +
@@ -664,7 +697,32 @@ function renderChat(tgMsgs) {
     return '<div class="chat-msg user">' + esc(m.content) + '</div>';
   }).join('');
 
-  el.innerHTML = tgHtml + webHtml;
+  var allHtml = tgHtml + webHtml;
+
+  // Show welcome state if no messages
+  if (!allHtml.trim()) {
+    el.innerHTML =
+      '<div class="chat-welcome">' +
+        '<div class="chat-avatar-large">E</div>' +
+        '<h3>Hey, I\'m Elira</h3>' +
+        '<p>Your AI build team. Ask me anything or tell me what to build.</p>' +
+        '<div class="chat-quick-actions">' +
+          '<button class="chat-quick-action" data-text="Build a REST API for a todo app">Build a REST API for a todo app</button>' +
+          '<button class="chat-quick-action" data-text="What can you do?">What can you do?</button>' +
+          '<button class="chat-quick-action" data-text="Show me the status of my builds">Show me build status</button>' +
+        '</div>' +
+      '</div>';
+    // Bind quick actions
+    el.querySelectorAll('.chat-quick-action').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        document.getElementById('chat-input').value = btn.dataset.text;
+        sendChat();
+      });
+    });
+    return;
+  }
+
+  el.innerHTML = allHtml;
   requestAnimationFrame(function() {
     el.scrollTop = el.scrollHeight;
   });
@@ -675,6 +733,26 @@ async function sendChat() {
   var text = input.value.trim();
   if (!text) return;
   input.value = '';
+  input.style.height = 'auto';
+
+  // Detect build commands — route to goal creation
+  var buildMatch = text.match(/^(build|create|make|start)\s+(.{3,})/i);
+  if (buildMatch) {
+    chatHistory.push({ role: 'user', content: text });
+    renderChat([]);
+    try {
+      var goal = await api('/api/goals', { method: 'POST', body: { text: buildMatch[2].trim() } });
+      selectedGoalId = goal.id;
+      chatHistory.push({ role: 'assistant', content: 'Building: "' + buildMatch[2].trim() + '"\n\nPipeline started. Switch to the Building tab to watch progress.' });
+      showToast('Goal created! Pipeline starting...', 'success');
+      fetchGoals();
+      switchTab('building');
+    } catch (err) {
+      chatHistory.push({ role: 'assistant', content: 'Build failed: ' + err.message });
+    }
+    renderChat([]);
+    return;
+  }
 
   chatHistory.push({ role: 'user', content: text });
   renderChat([]);
@@ -685,6 +763,12 @@ async function sendChat() {
       body: { messages: chatHistory, goalId: selectedGoalId || null },
     });
     chatHistory.push({ role: 'assistant', content: data.reply });
+    // Show badge if chat is minimized
+    var cw = document.getElementById('chat-window');
+    if (cw && !cw.classList.contains('open')) {
+      var badge = document.getElementById('chat-badge');
+      if (badge) badge.style.display = '';
+    }
   } catch (e) {
     chatHistory.push({ role: 'assistant', content: 'Error: ' + e.message });
   }
@@ -758,25 +842,84 @@ function switchTab(name) {
   if (target) target.style.display = '';
 
   if (name === 'workspace') renderWorkspace();
+  if (name === 'overview') fetchOverview();
 }
 
 // ── Events ──
 function bindEvents() {
-  document.getElementById('build-btn').addEventListener('click', createGoal);
-  document.getElementById('goal-input').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); createGoal(); }
-  });
+  // Chat widget toggle
+  var chatBubble = document.getElementById('chat-bubble');
+  var chatWindow = document.getElementById('chat-window');
+  var chatMinimize = document.getElementById('chat-minimize');
+
+  if (chatBubble) {
+    chatBubble.addEventListener('click', function() {
+      chatWindow.classList.add('open');
+      chatBubble.style.display = 'none';
+      document.getElementById('chat-badge').style.display = 'none';
+      document.getElementById('chat-input').focus();
+    });
+  }
+
+  if (chatMinimize) {
+    chatMinimize.addEventListener('click', function() {
+      chatWindow.classList.remove('open');
+      chatBubble.style.display = 'flex';
+    });
+  }
+
   document.getElementById('chat-send').addEventListener('click', sendChat);
-  document.getElementById('chat-input').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') sendChat();
+  var chatInput = document.getElementById('chat-input');
+  chatInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  });
+  // Auto-resize textarea
+  chatInput.addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 80) + 'px';
   });
   document.querySelectorAll('.tab').forEach(function(t) {
     t.addEventListener('click', function() { switchTab(t.dataset.tab); });
   });
   document.getElementById('new-goal-btn').addEventListener('click', function() {
-    switchTab('building');
-    document.getElementById('goal-input').focus();
+    closeMobileSidebar();
+    // Open chat widget and focus input
+    var cw = document.getElementById('chat-window');
+    var cb = document.getElementById('chat-bubble');
+    if (cw && !cw.classList.contains('open')) {
+      cw.classList.add('open');
+      if (cb) cb.style.display = 'none';
+    }
+    var ci = document.getElementById('chat-input');
+    ci.placeholder = 'Tell me what to build...';
+    ci.focus();
   });
+
+  // Hamburger menu
+  var hamburger = document.getElementById('hamburger-btn');
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('sidebar-overlay');
+
+  if (hamburger) {
+    hamburger.addEventListener('click', function() {
+      var isOpen = sidebar.classList.toggle('open');
+      hamburger.classList.toggle('open', isOpen);
+      overlay.classList.toggle('open', isOpen);
+    });
+  }
+
+  if (overlay) {
+    overlay.addEventListener('click', closeMobileSidebar);
+  }
+}
+
+function closeMobileSidebar() {
+  var sidebar = document.getElementById('sidebar');
+  var hamburger = document.getElementById('hamburger-btn');
+  var overlay = document.getElementById('sidebar-overlay');
+  if (sidebar) sidebar.classList.remove('open');
+  if (hamburger) hamburger.classList.remove('open');
+  if (overlay) overlay.classList.remove('open');
 }
 
 // ── Auto refresh ──
@@ -790,6 +933,14 @@ function startAutoRefresh() {
     fetchUserModel();
   }, 30000);
 
+  // Overview every 10 seconds when active
+  setInterval(function() {
+    var overviewTab = document.getElementById('tab-overview');
+    if (overviewTab && overviewTab.style.display !== 'none') {
+      fetchOverview();
+    }
+  }, 10000);
+
   // Logs every 3 seconds when active
   setInterval(function() {
     if (selectedGoalId) fetchLogs();
@@ -801,6 +952,237 @@ function startAutoRefresh() {
       if (tgMsgs) renderChat(tgMsgs);
     });
   }, 4000);
+}
+
+// ── Overview Dashboard ──
+async function fetchOverview() {
+  try {
+    var results = await Promise.all([
+      api('/api/status'),
+      api('/api/logs'),
+      api('/api/stats/metrics').catch(function() { return { byAgent: [], floorStats: {}, recentFailures: [] }; }),
+      api('/api/stats/circuits').catch(function() { return []; })
+    ]);
+    renderOverview(results[0], results[1], results[2], results[3]);
+  } catch (err) {
+    console.error('Overview fetch error:', err);
+  }
+}
+
+function renderOverview(status, logs, metrics, circuits) {
+  var el = document.getElementById('overview-content');
+  if (!el) return;
+
+  // Stat cards
+  var budgetPct = status.llmBudgetPct || 0;
+  var budgetColor = budgetPct > 20 ? 'green' : budgetPct > 5 ? 'accent' : 'red';
+  var uptimeStr = formatUptime(status.uptime || 0);
+
+  var statsHtml =
+    '<div class="overview-grid">' +
+      statCard('Goals', status.goalCount || 0, 'accent', '') +
+      statCard('Floors Live', status.floorsLive || 0, 'green', 'of ' + (status.floorCount || 0) + ' total') +
+      statCard('Blocked', status.floorsBlocked || 0, status.floorsBlocked > 0 ? 'red' : 'green', status.floorsActive > 0 ? status.floorsActive + ' active now' : 'none active') +
+      statCard('LLM Budget', budgetPct + '%', budgetColor, status.llmTotalCalls + ' calls') +
+      statCard('Uptime', uptimeStr, 'blue', 'v' + (status.version || '3.0.0')) +
+    '</div>';
+
+  // Health indicators
+  var healthHtml =
+    '<div class="overview-section">' +
+      '<h3><span class="section-dot green"></span>System Health</h3>' +
+      '<div class="health-row">' +
+        healthChip('LLM', status.llm ? 'on' : 'off', status.llmProvider || 'None') +
+        healthChip('Telegram', status.telegram ? 'on' : 'off', status.telegram ? 'Connected' : 'Off') +
+        healthChip('Search', status.webSearch !== 'None' ? 'on' : 'off', status.webSearch || 'None') +
+        healthChip('Budget', budgetPct > 5 ? 'on' : budgetPct > 0 ? 'warn' : 'off', budgetPct + '% left') +
+      '</div>';
+
+  // Circuit breakers
+  if (circuits && Object.keys(circuits).length > 0) {
+    healthHtml += '<div class="circuit-row">';
+    var circuitKeys = Array.isArray(circuits) ? [] : Object.keys(circuits);
+    circuitKeys.forEach(function(name) {
+      var breaker = circuits[name];
+      var state = breaker.state || 'closed';
+      healthHtml += '<span class="circuit-chip ' + state + '">' + esc(name) + ': ' + state + '</span>';
+    });
+    healthHtml += '</div>';
+  }
+  healthHtml += '</div>';
+
+  // Activity feed
+  var recentLogs = (logs || []).slice(0, 12);
+  var activityHtml =
+    '<div class="overview-section">' +
+      '<h3><span class="section-dot amber"></span>Recent Activity</h3>';
+
+  if (recentLogs.length === 0) {
+    activityHtml += '<p style="color:var(--text-dim);font-size:12px">No activity yet. Create a goal to get started.</p>';
+  } else {
+    activityHtml += '<div class="activity-feed">';
+    recentLogs.forEach(function(l) {
+      activityHtml +=
+        '<div class="activity-item">' +
+          '<span class="act-time">' + timeAgo(l.created_at) + '</span>' +
+          '<span class="act-agent ' + l.agent + '">' + esc(l.agent) + '</span>' +
+          '<span class="act-msg">' + esc(l.message) + '</span>' +
+        '</div>';
+    });
+    activityHtml += '</div>';
+  }
+  activityHtml += '</div>';
+
+  // Agent performance
+  var byAgent = (metrics && metrics.byAgent) || [];
+  var perfHtml = '';
+  if (byAgent.length > 0) {
+    perfHtml =
+      '<div class="overview-section">' +
+        '<h3><span class="section-dot green"></span>Agent Performance</h3>' +
+        '<table class="agent-perf-table">' +
+          '<thead><tr>' +
+            '<th>Agent</th><th>Event</th><th>Total</th><th>Success</th><th>Rate</th><th>Avg Time</th>' +
+          '</tr></thead>' +
+          '<tbody>';
+    byAgent.forEach(function(row) {
+      var rate = row.total > 0 ? Math.round(row.successes / row.total * 100) : 0;
+      var rateClass = rate >= 80 ? 'high' : rate >= 50 ? 'mid' : 'low';
+      var avgTime = row.avg_duration_ms ? formatDuration(row.avg_duration_ms) : '--';
+      perfHtml +=
+        '<tr>' +
+          '<td><span class="agent-badge ' + (row.agent || '').toLowerCase() + '">' + esc(row.agent) + '</span></td>' +
+          '<td>' + esc(row.event) + '</td>' +
+          '<td>' + row.total + '</td>' +
+          '<td>' + row.successes + '</td>' +
+          '<td><span class="success-rate ' + rateClass + '">' + rate + '%</span></td>' +
+          '<td style="font-family:var(--mono);font-size:11px;color:var(--text-dim)">' + avgTime + '</td>' +
+        '</tr>';
+    });
+    perfHtml += '</tbody></table></div>';
+  }
+
+  // Floor stats summary
+  var floorStats = (metrics && metrics.floorStats) || {};
+  var floorStatsHtml = '';
+  if (floorStats.total_floors > 0) {
+    var liveRate = floorStats.total_floors > 0 ? Math.round(floorStats.live_floors / floorStats.total_floors * 100) : 0;
+    floorStatsHtml =
+      '<div class="overview-section">' +
+        '<h3><span class="section-dot ' + (liveRate >= 70 ? 'green' : 'amber') + '"></span>Floor Completion</h3>' +
+        '<div class="overview-grid" style="grid-template-columns:repeat(3,1fr)">' +
+          statCard('Completed', floorStats.live_floors || 0, 'green', 'of ' + floorStats.total_floors + ' tracked') +
+          statCard('Success Rate', liveRate + '%', liveRate >= 70 ? 'green' : 'accent', '') +
+          statCard('Avg Time', formatDuration(floorStats.avg_floor_ms || 0), 'blue', formatDuration(floorStats.min_floor_ms || 0) + ' - ' + formatDuration(floorStats.max_floor_ms || 0)) +
+        '</div>' +
+      '</div>';
+  }
+
+  el.innerHTML = statsHtml + healthHtml + floorStatsHtml + activityHtml + perfHtml;
+}
+
+function statCard(label, value, colorClass, sub) {
+  return '<div class="stat-card">' +
+    '<span class="stat-label">' + esc(label) + '</span>' +
+    '<span class="stat-value ' + colorClass + '">' + esc(String(value)) + '</span>' +
+    (sub ? '<span class="stat-sub">' + esc(sub) + '</span>' : '') +
+  '</div>';
+}
+
+function healthChip(label, state, detail) {
+  return '<div class="health-chip">' +
+    '<span class="h-dot ' + state + '"></span>' +
+    '<span>' + esc(label) + ': ' + esc(detail) + '</span>' +
+  '</div>';
+}
+
+function formatUptime(seconds) {
+  if (seconds < 60) return seconds + 's';
+  if (seconds < 3600) return Math.floor(seconds / 60) + 'm';
+  if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ' + Math.floor((seconds % 3600) / 60) + 'm';
+  return Math.floor(seconds / 86400) + 'd ' + Math.floor((seconds % 86400) / 3600) + 'h';
+}
+
+function formatDuration(ms) {
+  if (!ms || ms === 0) return '--';
+  if (ms < 1000) return Math.round(ms) + 'ms';
+  if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+  return (ms / 60000).toFixed(1) + 'm';
+}
+
+// ── Floor Timeline ──
+function renderFloorTimeline(floor, metrics) {
+  if (!metrics || !metrics.byAgent || metrics.byAgent.length === 0) return '';
+
+  // Gather per-agent timing for this floor from metrics
+  var agents = [
+    { key: 'Alba', cls: 'alba', label: 'Alba' },
+    { key: 'Vex', cls: 'vex', label: 'Vex1' },
+    { key: 'David', cls: 'david', label: 'David' },
+    { key: 'Vex', cls: 'vex', label: 'Vex2' },
+    { key: 'Elira', cls: 'elira', label: 'Elira' }
+  ];
+
+  // Find the max duration for scaling
+  var maxMs = 1;
+  var agentTimes = [];
+  agents.forEach(function(a) {
+    var match = metrics.byAgent.find(function(m) { return m.agent === a.key; });
+    var ms = match ? (match.avg_duration_ms || 0) : 0;
+    if (ms > maxMs) maxMs = ms;
+    agentTimes.push({ label: a.label, cls: a.cls, ms: ms });
+  });
+
+  var barsHtml = agentTimes.map(function(t) {
+    var pct = maxMs > 0 ? Math.round(t.ms / maxMs * 100) : 0;
+    if (pct < 2 && t.ms > 0) pct = 2; // minimum visible width
+    return '<div class="timeline-bar-row">' +
+      '<span class="timeline-bar-label">' + t.label + '</span>' +
+      '<div class="timeline-bar-track">' +
+        '<div class="timeline-bar-fill ' + t.cls + '" style="width:' + pct + '%"></div>' +
+      '</div>' +
+      '<span class="timeline-bar-time">' + formatDuration(t.ms) + '</span>' +
+    '</div>';
+  }).join('');
+
+  return '<div class="floor-timeline">' +
+    '<h4>Agent Timeline (avg)</h4>' +
+    '<div class="timeline-bars">' + barsHtml + '</div>' +
+  '</div>';
+}
+
+// ── Tutorial ──
+function showTutorialIfFirstVisit() {
+  if (localStorage.getItem('askelira_tutorial_done')) return;
+  var overlay = document.getElementById('tutorial-overlay');
+  if (!overlay) return;
+  overlay.style.display = '';
+
+  // Dismiss button
+  document.getElementById('tutorial-dismiss').addEventListener('click', function() {
+    dismissTutorial();
+  });
+
+  // Click backdrop to dismiss
+  overlay.addEventListener('click', function(e) {
+    if (e.target === overlay) dismissTutorial();
+  });
+
+  // Example buttons fill the chat input and dismiss
+  overlay.querySelectorAll('.tutorial-example').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var text = btn.dataset.text;
+      document.getElementById('chat-input').value = text;
+      dismissTutorial();
+      document.getElementById('chat-input').focus();
+    });
+  });
+}
+
+function dismissTutorial() {
+  var overlay = document.getElementById('tutorial-overlay');
+  if (overlay) overlay.style.display = 'none';
+  localStorage.setItem('askelira_tutorial_done', '1');
 }
 
 // ── Utilities ──

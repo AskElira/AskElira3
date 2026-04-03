@@ -34,10 +34,11 @@ async function syntaxCheckFiles(writtenFiles, goalId) {
   for (const filename of writtenFiles) {
     const filePath = workspace.getWorkspacePath(goalId) + '/' + filename;
     if (filename.endsWith('.js') || filename.endsWith('.mjs')) {
-      const result = await executor.run(`node --check ${filePath}`);
+      // Use execFile-style quoting to handle filenames with spaces
+      const result = await executor.runExecFile('node', ['--check', filePath]);
       if (!result.success) errors.push(`${filename}: ${result.stderr}`);
     } else if (filename.endsWith('.py')) {
-      const result = await executor.run(`python3 -m py_compile ${filePath}`);
+      const result = await executor.runExecFile('python3', ['-m', 'py_compile', filePath]);
       if (!result.success) errors.push(`${filename}: ${result.stderr}`);
     }
   }

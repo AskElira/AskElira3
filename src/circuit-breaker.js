@@ -34,6 +34,7 @@ class CircuitBreaker {
     this.failures = 0;
     this.lastFailureTime = 0;
     this.openedAt = 0;
+    this._halfOpenPending = false; // guards the single test request in HALF_OPEN
   }
 
   /**
@@ -47,11 +48,19 @@ class CircuitBreaker {
     if (this.state === STATES.OPEN) {
       const elapsed = Date.now() - this.openedAt;
       if (elapsed >= this.cooldownMs) {
+        // Only allow one test request through HALF_OPEN
+        if (this._halfOpenPending) {
+          throw new CircuitOpenError(this.name, this.openedAt + this.cooldownMs);
+        }
+        this._halfOpenPending = true;
         this.state = STATES.HALF_OPEN;
         console.log(`[CircuitBreaker/${this.name}] HALF_OPEN — allowing test request`);
       } else {
         throw new CircuitOpenError(this.name, this.openedAt + this.cooldownMs);
       }
+    } else if (this.state === STATES.HALF_OPEN && this._halfOpenPending) {
+      // Another call arrived while the test request is in-flight — reject it
+      throw new CircuitOpenError(this.name, this.openedAt + this.cooldownMs);
     }
 
     try {
@@ -70,6 +79,7 @@ class CircuitBreaker {
     }
     this.failures = 0;
     this.state = STATES.CLOSED;
+    this._halfOpenPending = false;
   }
 
   _onFailure(err) {
@@ -80,6 +90,7 @@ class CircuitBreaker {
       // Half-open test failed — reopen
       this.state = STATES.OPEN;
       this.openedAt = Date.now();
+      this._halfOpenPending = false;
       console.warn(`[CircuitBreaker/${this.name}] OPEN — half-open test failed: ${err.message}`);
       return;
     }
@@ -118,6 +129,7 @@ class CircuitBreaker {
     this.state = STATES.CLOSED;
     this.failures = 0;
     this.openedAt = 0;
+    this._halfOpenPending = false;
     console.log(`[CircuitBreaker/${this.name}] Manually reset to CLOSED`);
   }
 }

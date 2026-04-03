@@ -591,7 +591,7 @@ async function handleTelegramMessage(userText) {
 
   if (classification.intent === 'steven_summary') {
     const fs = require('fs');
-    const STATE_FILE = path.resolve(__dirname, '..', 'data', 'heartbeat-state.json');
+    const STATE_FILE = path.resolve(__dirname, '..', '..', 'data', 'heartbeat-state.json');
     let stateData = {};
     try { stateData = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch (_) {}
     const now = Date.now();

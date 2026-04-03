@@ -117,6 +117,12 @@ if (!fs.existsSync(WORKSPACES_DIR)) {
 function rollbackWorkspace(goalId) {
   const dir = path.join(WORKSPACES_DIR, goalId);
   if (!fs.existsSync(path.join(dir, '.git'))) throw new Error(`No git repo in workspace for goal ${goalId}`);
+  // Check that HEAD~1 exists (at least 2 commits) before attempting rollback
+  try {
+    execSync('git rev-parse HEAD~1', { cwd: dir, stdio: 'ignore' });
+  } catch (_) {
+    throw new Error(`Cannot rollback: workspace for goal ${goalId} has only one commit`);
+  }
   execSync('git checkout HEAD~1 -- .', { cwd: dir });
   return true;
 }
