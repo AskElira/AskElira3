@@ -44,6 +44,11 @@ body {
   grid-template-columns: 280px 1fr;
   grid-template-rows: 56px 1fr auto;
   height: 100vh;
+  min-width: 0;
+}
+
+.app > * {
+  min-width: 0;
 }
 
 /* Header */
@@ -337,6 +342,8 @@ body {
   padding: 20px;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  width: 100%;
 }
 
 /* Input area */
@@ -430,6 +437,7 @@ body {
 .tab-content {
   flex: 1;
   overflow-y: auto;
+  width: 100%;
 }
 
 /* Goal detail */
@@ -564,6 +572,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  width: 100%;
 }
 
 .floor-card {
