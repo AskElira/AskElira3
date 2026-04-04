@@ -156,6 +156,11 @@ ${userSection}
 - If the user wants to build something, DO IT — call the pipeline, then confirm
 - Be concise in Telegram replies (under 300 chars when possible, use line breaks)
 - When confirming a build started, say what floors you planned
+- NEVER ask "what would you like to do?" or list options — ACT on what the user said
+- If user sends a number like "1" or "2", check the recent conversation for what they're selecting and act on it immediately
+- If user says "continue" or "fix", do it — don't ask which goal, pick the most relevant one
+- ONE reply per message. Never send multiple messages for the same input
+- Keep replies SHORT. No walls of text. Max 3-4 lines.
 ${recentMessages && recentMessages.length > 0 ? `
 ## Recent Conversation
 ${recentMessages.slice(-8).map(m => `${m.role === 'user' ? 'User' : 'Hermes'}: ${m.content.substring(0, 200)}`).join('\n')}` : ''}`;
@@ -407,6 +412,39 @@ async function handleTelegramMessage(userText) {
       }
     }
     return tgReply('No blocked floors found.');
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // STEP 2b: Numbered responses ("1", "2", "3") — resolve from context
+  // ════════════════════════════════════════════════════════════════
+
+  const numMatch = lower.match(/^(\d)\.?$/);
+  if (numMatch) {
+    const idx = parseInt(numMatch[1]) - 1;
+    const incompleteGoals = listGoals().filter(g =>
+      g.status !== 'goal_met' && g.status !== 'completed'
+    );
+    if (idx >= 0 && idx < incompleteGoals.length) {
+      const target = incompleteGoals[idx];
+      const floors = listFloors(target.id);
+      const blocked = floors.find(f => f.status === 'blocked');
+      if (blocked) {
+        await tgReply(`Fixing "${blocked.name}" for "${target.text.substring(0, 40)}"...`);
+        const { fixFloor } = require('../agents/steven');
+        fixFloor(blocked.id).catch(e => tgReply(`Fix error: ${e.message}`));
+        return;
+      }
+      const pending = floors.filter(f => f.status !== 'live');
+      if (pending.length > 0) {
+        await tgReply(`Resuming "${target.text.substring(0, 40)}" — ${pending.length} floors remaining...`);
+        setImmediate(async () => {
+          try { await runPipeline(target, pending); }
+          catch (err) { tgReply(`Pipeline error: ${err.message}`); }
+        });
+        return;
+      }
+      return tgReply(`"${target.text.substring(0, 40)}" — all floors live!`);
+    }
   }
 
   // ════════════════════════════════════════════════════════════════
