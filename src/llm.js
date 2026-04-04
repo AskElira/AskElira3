@@ -10,8 +10,6 @@ const USAGE_FILE = path.resolve(__dirname, '..', 'data', 'usage.json');
 const USAGE_BUDGET = parseInt(process.env.TOKEN_BUDGET || '5000000', 10); // default 5M tokens
 const USAGE_ALERT_THRESHOLD = 0.9;
 
-let _usageAlerted = false;
-
 function loadUsage() {
   try {
     return JSON.parse(fs.readFileSync(USAGE_FILE, 'utf8'));
@@ -24,24 +22,29 @@ function saveUsage(usage) {
   fs.writeFileSync(USAGE_FILE, JSON.stringify(usage, null, 2));
 }
 
+const ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000; // max 1 alert per 6 hours
+
 function trackUsage(tokensUsed) {
   const usage = loadUsage();
   usage.totalTokens += tokensUsed;
   usage.calls += 1;
   usage.lastUpdated = new Date().toISOString();
-  saveUsage(usage);
 
   const pct = usage.totalTokens / USAGE_BUDGET;
-  if (pct >= USAGE_ALERT_THRESHOLD && !_usageAlerted) {
-    _usageAlerted = true;
+  const lastAlert = usage.lastAlertAt ? new Date(usage.lastAlertAt).getTime() : 0;
+  const now = Date.now();
+
+  if (pct >= USAGE_ALERT_THRESHOLD && (now - lastAlert) > ALERT_COOLDOWN_MS) {
+    usage.lastAlertAt = new Date().toISOString();
     const used = Math.round(pct * 100);
-    console.warn(`[LLM] ⚠️ Usage at ${used}% of budget (${usage.totalTokens.toLocaleString()} / ${USAGE_BUDGET.toLocaleString()} tokens)`);
-    // Send Telegram alert (non-blocking)
+    console.warn(`[LLM] Usage at ${used}% of budget (${usage.totalTokens.toLocaleString()} / ${USAGE_BUDGET.toLocaleString()} tokens)`);
     try {
       const { sendTelegram } = require('./notify');
-      sendTelegram(`⚠️ *Usage Alert*\n\nMiniMax token usage is at *${used}%* of budget.\n${usage.totalTokens.toLocaleString()} / ${USAGE_BUDGET.toLocaleString()} tokens used.\n\nSwitching chat/status to local model. Building tasks stay on MiniMax.`).catch(() => {});
+      sendTelegram(`Usage at *${used}%* of budget (${usage.totalTokens.toLocaleString()} / ${USAGE_BUDGET.toLocaleString()} tokens). Raise TOKEN_BUDGET in .env to silence.`).catch(() => {});
     } catch {}
   }
+
+  saveUsage(usage);
   return pct;
 }
 
