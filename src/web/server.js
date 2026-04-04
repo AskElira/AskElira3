@@ -479,34 +479,53 @@ async function handleTelegramMessage(userText) {
       g.status !== 'goal_met' && g.status !== 'completed'
     );
     if (!incompleteGoals.length) {
-      return tgReply('No incomplete goals to resume. Say "build [idea]" to start something new.');
+      return tgReply('No incomplete goals to resume.');
     }
 
-    // Try to match from classifier's resolved_target or recent conversation context
+    // Try to match from classifier's resolved_target
     let target = null;
     const resolvedName = (classification.resolved_target || '').toLowerCase();
     if (resolvedName) {
       target = incompleteGoals.find(g => g.text.toLowerCase().includes(resolvedName));
     }
-    // Fallback: check recent conversation for a goal name mentioned
+    // Try user's message text for goal keywords
+    if (!target) {
+      const msgLower = userText.toLowerCase();
+      target = incompleteGoals.find(g => {
+        const words = g.text.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+        return words.some(w => msgLower.includes(w));
+      });
+    }
+    // Fallback: check recent conversation
     if (!target && recentMessages.length > 0) {
       const recentText = recentMessages.slice(-6).map(m => m.content).join(' ').toLowerCase();
       target = incompleteGoals.find(g => recentText.includes(g.text.substring(0, 30).toLowerCase()));
     }
-    // Last resort: newest incomplete goal
     if (!target) target = incompleteGoals[0];
 
     const floors = listFloors(target.id);
-    const live = floors.filter(f => f.status === 'live').length;
-    const blocked = floors.filter(f => f.status === 'blocked').length;
-    const partial = floors.filter(f => ['pending', 'building', 'researching', 'auditing', 'reviewing'].includes(f.status)).length;
+    const blocked = floors.find(f => f.status === 'blocked');
+    const pending = floors.filter(f => f.status !== 'live');
 
-    resumeConfirmState = { waiting: true, goalId: target.id, goalText: target.text };
-    return tgReply(
-      `Resume "${target.text.substring(0, 45)}"?\n` +
-      `${live}/${floors.length} floors live · ${blocked} blocked · ${partial} remaining\n\n` +
-      `Reply *yes* to confirm, or anything else to cancel.`
-    );
+    // If there's a blocked floor, fix it first
+    if (blocked) {
+      await tgReply(`Fixing blocked floor "${blocked.name}" in "${target.text.substring(0, 40)}"...`);
+      const { fixFloor } = require('../agents/steven');
+      fixFloor(blocked.id).catch(e => tgReply(`Fix error: ${e.message}`));
+      return;
+    }
+
+    // Otherwise resume pipeline — no confirmation needed when user explicitly asked
+    if (pending.length > 0) {
+      await tgReply(`Resuming "${target.text.substring(0, 40)}" — ${pending.length} floors remaining...`);
+      setImmediate(async () => {
+        try { await runPipeline(target, pending); }
+        catch (err) { tgReply(`Pipeline error: ${err.message}`); }
+      });
+      return;
+    }
+
+    return tgReply(`"${target.text.substring(0, 40)}" — all floors live!`);
   }
 
   if (classification.intent === 'delete') {
@@ -550,11 +569,27 @@ async function handleTelegramMessage(userText) {
   if (classification.intent === 'fix') {
     const { fixFloor } = require('../agents/steven');
     const goals = listGoals();
-    for (const g of goals) {
+    // Try to match the goal user is talking about
+    let targetGoal = null;
+    const resolvedName = (classification.resolved_target || '').toLowerCase();
+    if (resolvedName) {
+      targetGoal = goals.find(g => g.text.toLowerCase().includes(resolvedName));
+    }
+    if (!targetGoal) {
+      // Check user's message for goal keywords
+      const msgLower = userText.toLowerCase();
+      targetGoal = goals.find(g => {
+        const words = g.text.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+        return words.some(w => msgLower.includes(w));
+      });
+    }
+    // Search in the matched goal first, then all goals
+    const searchOrder = targetGoal ? [targetGoal, ...goals.filter(g => g.id !== targetGoal.id)] : goals;
+    for (const g of searchOrder) {
       const floors = listFloors(g.id);
       const blocked = floors.find(f => f.status === 'blocked');
       if (blocked) {
-        await tgReply(`*Steven* — fixing "${blocked.name}"...`);
+        await tgReply(`Fixing "${blocked.name}" in "${g.text.substring(0, 40)}"...`);
         fixFloor(blocked.id).catch(e => tgReply(`Fix error: ${e.message}`));
         return;
       }
@@ -656,16 +691,41 @@ async function handleTelegramMessage(userText) {
   let contextMessages = [];
 
   if (goals.length > 0) {
-    const latest = goals[0];
-    const floors = listFloors(latest.id);
-    const files = workspace.listFiles(latest.id);
-    const wsSummary = files.length > 0 ? workspace.getWorkspaceSummary(latest.id) : '';
-    if (wsSummary) {
-      contextMessages = [
-        { role: 'user', content: `[WORKSPACE]\n${wsSummary}\n[/WORKSPACE]` },
-        { role: 'assistant', content: 'I have the full workspace loaded.' },
-      ];
+    // Find the goal the user is most likely talking about
+    let relevantGoal = null;
+    const msgLower = userText.toLowerCase();
+    const resolved = (classification.resolved_target || '').toLowerCase();
+
+    // Try resolved_target from classifier
+    if (resolved) {
+      relevantGoal = goals.find(g => g.text.toLowerCase().includes(resolved));
     }
+    // Try matching keywords from user message against goal texts
+    if (!relevantGoal) {
+      relevantGoal = goals.find(g => {
+        const words = g.text.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+        return words.some(w => msgLower.includes(w));
+      });
+    }
+    // Fallback to most recent goal
+    if (!relevantGoal) relevantGoal = goals[0];
+
+    const floors = listFloors(relevantGoal.id);
+    const files = workspace.listFiles(relevantGoal.id);
+    const floorSummary = floors.map(f => `F${f.floor_number} "${f.name}" [${f.status}]${f.vex2_score != null ? ' vex2:' + f.vex2_score : ''}`).join('\n');
+    const wsSummary = files.length > 0 ? workspace.getWorkspaceSummary(relevantGoal.id) : '';
+
+    const goalContext = [
+      `## Active Goal: "${relevantGoal.text}"`,
+      `Status: ${relevantGoal.status} | ${floors.filter(f=>f.status==='live').length}/${floors.length} floors live`,
+      `\n### Floors\n${floorSummary}`,
+      wsSummary ? `\n### Workspace Files\n${wsSummary}` : '',
+    ].join('\n');
+
+    contextMessages = [
+      { role: 'user', content: `[CONTEXT]\n${goalContext}\n[/CONTEXT]\n\nUse this to answer questions about this build.` },
+      { role: 'assistant', content: 'I have the goal context loaded.' },
+    ];
   }
 
   contextMessages.push({ role: 'user', content: userText });
