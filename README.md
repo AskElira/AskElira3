@@ -7,6 +7,16 @@ Vex validates everything, Elira approves. If anything breaks, Steven fixes it.
 
 ## Setup
 
+**Prerequisites:** Node.js 18+ and a C++ compiler for the SQLite native addon:
+
+| Platform | Install build tools |
+|----------|-------------------|
+| **Mac** | `xcode-select --install` |
+| **Windows** | `npm install -g windows-build-tools` |
+| **Linux** | `sudo apt install build-essential python3` |
+
+**Then:**
+
 1. `git clone https://github.com/AskElira/askelira3 && cd askelira3`
 2. `npm install`
 3. `cp .env.example .env` -- add your `LLM_API_KEY`
