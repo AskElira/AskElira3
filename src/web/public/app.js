@@ -786,6 +786,29 @@ async function sendChat() {
     return;
   }
 
+  // ── Action: Claude Code ──
+  var claudeMatch = text.match(/^(?:claude|claude code|ask claude|use claude)\s*(.*)/i);
+  if (claudeMatch) {
+    var claudeTask = claudeMatch[1].trim() || 'What can you help with?';
+    chatHistory.push({ role: 'user', content: text });
+    renderChat([]);
+    chatHistory.push({ role: 'assistant', content: 'Sending to Claude Code: "' + claudeTask.substring(0, 60) + '"...' });
+    renderChat([]);
+    try {
+      var claudeResult = await api('/api/chat', {
+        method: 'POST',
+        body: { messages: [{ role: 'user', content: 'claude ' + claudeTask }], goalId: selectedGoalId || null },
+      });
+      chatHistory.pop(); // remove "sending..." placeholder
+      chatHistory.push({ role: 'assistant', content: claudeResult.reply });
+    } catch (err) {
+      chatHistory.pop();
+      chatHistory.push({ role: 'assistant', content: 'Claude Code error: ' + err.message });
+    }
+    renderChat([]);
+    return;
+  }
+
   // ── Action: Continue / Resume build ──
   if (/^(continue|resume|keep building|retry|try again|run again)/i.test(lower)) {
     chatHistory.push({ role: 'user', content: text });

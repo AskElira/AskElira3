@@ -136,6 +136,7 @@ You are responding via Telegram. You ARE the bot.
 - delete → remove a goal
 - digest → send daily email now
 - files → list workspace files
+- claude [task] → delegate a complex task to Claude Code (coding, debugging, file editing)
 
 ## System
 LLM: ${config.eliraModel} | AgentMail: ${config.hasAgentmail ? `→ ${config.digestEmail}` : 'off'} | Search: ${config.hasTavily ? 'Tavily' : config.hasBrave ? 'Brave' : 'off'}
@@ -210,6 +211,7 @@ Available intents:
 - files: Show workspace files.
 - notifications: View or change notification settings. Includes: stop/mute/silence/disable/enable alerts, change what gets notified, "stop Steven notifications", "mute floor alerts", "silence", etc.
 - steven_summary: Check what Steven has been doing recently (activity, history, log).
+- claude_code: User wants to use Claude Code for a task — coding, fixing, editing files, or any complex task. Triggers when user says "use claude", "claude code", "ask claude", "let claude handle it", or references Claude Code directly. resolved_target = the task description.
 - chat: General conversation, question, or anything that isn't a specific action.
 - ambiguous: Intent is genuinely unclear — could be multiple things. Use sparingly — prefer "chat" when in doubt.
 
@@ -436,6 +438,32 @@ async function handleTelegramMessage(userText) {
       }
       return tgReply(`"${target.text.substring(0, 40)}" — all floors live!`);
     }
+  }
+
+  // ── Fast-path: Claude Code ──
+  const claudeMatch = userText.match(/^(?:claude|claude code|ask claude|use claude)\s*(.*)/i);
+  if (claudeMatch) {
+    const task = claudeMatch[1].trim() || 'What can you help with?';
+    const { claudeCode } = require('../claude-code');
+    const goals = listGoals();
+    let targetGoal = goals.find(g => {
+      const words = g.text.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+      return words.some(w => task.toLowerCase().includes(w));
+    }) || goals[0];
+    const cwd = targetGoal ? workspace.getWorkspacePath(targetGoal.id) : process.cwd();
+    await tgReply(`Claude Code: "${task.substring(0, 60)}"...`);
+    setImmediate(async () => {
+      try {
+        const result = await claudeCode(task, { cwd });
+        if (result.success) {
+          const output = result.output.length > 3500 ? result.output.substring(0, 3500) + '\n...(truncated)' : result.output;
+          await tgReply(`*Claude Code* (${Math.round(result.durationMs / 1000)}s)\n\n${output}`);
+        } else {
+          await tgReply(`Claude Code failed: ${result.error.substring(0, 500)}`);
+        }
+      } catch (err) { await tgReply(`Claude Code error: ${err.message}`); }
+    });
+    return;
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -682,6 +710,45 @@ async function handleTelegramMessage(userText) {
       return `${icon} ${v.floorName || k.substring(0, 8)} — ${v.lastFixResult} (${ago}m ago)`;
     });
     return tgReply(`*Steven Summary (6h)*\n\n${lines.join('\n')}`);
+  }
+
+  // ── Claude Code: delegate complex tasks to Claude ──
+  if (classification.intent === 'claude_code') {
+    const { claudeCode } = require('../claude-code');
+    const task = classification.resolved_target || userText;
+
+    // Find relevant goal for workspace context
+    const goals = listGoals();
+    let targetGoal = null;
+    const msgLower = userText.toLowerCase();
+    targetGoal = goals.find(g => {
+      const words = g.text.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+      return words.some(w => msgLower.includes(w));
+    });
+    if (!targetGoal) targetGoal = goals[0];
+
+    const cwd = targetGoal ? workspace.getWorkspacePath(targetGoal.id) : process.cwd();
+    await tgReply(`Sending to Claude Code: "${task.substring(0, 60)}"...`);
+
+    setImmediate(async () => {
+      try {
+        const result = await claudeCode(task, { cwd });
+        if (result.success) {
+          const output = result.output.length > 3500
+            ? result.output.substring(0, 3500) + '\n\n... (truncated)'
+            : result.output;
+          await tgReply(`*Claude Code* (${Math.round(result.durationMs / 1000)}s)\n\n${output}`);
+        } else {
+          await tgReply(`Claude Code failed: ${result.error.substring(0, 500)}`);
+        }
+        if (targetGoal) {
+          addLog(targetGoal.id, null, 'Elira', `Claude Code task: ${task.substring(0, 100)} — ${result.success ? 'success' : 'failed'} (${result.durationMs}ms)`);
+        }
+      } catch (err) {
+        await tgReply(`Claude Code error: ${err.message}`);
+      }
+    });
+    return;
   }
 
   // ── Default: chat with full system context ──
