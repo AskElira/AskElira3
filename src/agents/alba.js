@@ -3,6 +3,7 @@ const { config } = require('../config');
 const { addLog } = require('../db');
 const { wrapInput } = require('../hermes/utils');
 const { createBreaker, CircuitOpenError } = require('../circuit-breaker');
+const { getDesignContext } = require('../hermes/design-intent');
 
 const tavilyBreaker = createBreaker('tavily');
 const braveBreaker = createBreaker('brave');
@@ -27,7 +28,11 @@ Your output format:
 - (potential issues to watch for)
 
 Be thorough but concise. Focus on actionable intelligence that David can use to build.
-When building software, include specific code patterns, library recommendations, and architecture decisions.`;
+When building software, include specific code patterns, library recommendations, and architecture decisions.
+
+When researching UI/frontend tasks, prefer dark-mode-first patterns and examples.
+Avoid recommending Material Design or Bootstrap defaults that use cold grays and bright primaries — the product uses warm sand/ember neutrals with a gold accent (see design intent context injected per task).
+Look for: CSS custom properties usage, design token patterns, warm dark UI examples.`;
 
 /**
  * Research a floor's task. Uses Tavily → Brave → Lightpanda → LLM-only.
@@ -115,6 +120,7 @@ Deliverable: ${wrapInput(floor.deliverable || 'Complete implementation')}`;
     msg += `\n\nVex Validation Issues (must address these):\n${vexFeedback.map((f, i) => `${i + 1}. ${wrapInput(f)}`).join('\n')}`;
   }
 
+  msg += `\n\n${getDesignContext('research')}`;
   msg += '\n\nProvide structured research notes. Think about what information, patterns, and best practices David needs to build the deliverable.';
   return msg;
 }

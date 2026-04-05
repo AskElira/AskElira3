@@ -5,6 +5,7 @@ const { config } = require('../config');
 const { validateSchema, APPROVE_SCHEMA, FIX_SCHEMA } = require('../schema-validator');
 
 const SOUL = fs.readFileSync(path.join(__dirname, 'SOUL.md'), 'utf8');
+const { getDesignContext } = require('./design-intent');
 
 let agentsRules = '';
 try {
@@ -22,46 +23,62 @@ function getSoul() {
 }
 
 /**
+ * Repair common JSON malformations from LLMs before parsing.
+ * Handles: trailing commas, single quotes, unquoted keys, comments, control chars.
+ */
+function repairJSON(text) {
+  let s = text;
+  // Strip single-line comments (// ...) but not inside strings — simple heuristic
+  s = s.replace(/(?<!["\w])\/\/[^\n]*/g, '');
+  // Strip multi-line comments
+  s = s.replace(/\/\*[\s\S]*?\*\//g, '');
+  // Replace single-quoted strings with double-quoted (simple cases)
+  s = s.replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, '"$1"');
+  // Remove trailing commas before ] or }
+  s = s.replace(/,\s*([}\]])/g, '$1');
+  // Quote unquoted keys: word: → "word":
+  s = s.replace(/([{,]\s*)(\w+)\s*:/g, '$1"$2":');
+  // Strip control characters except newlines and tabs
+  s = s.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
+  return s;
+}
+
+/**
  * Parse JSON from LLM response, handling markdown code blocks and fallbacks.
- * Tries all candidate array/object substrings, longest first.
+ * Tries: direct parse → repaired parse → substring extraction → fallback.
  */
 function parseJSON(text, fallback) {
+  if (!text || typeof text !== 'string') return fallback;
+
   // Strip markdown fences first
   const cleaned = text.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
+
+  // 1. Direct parse
   try { return JSON.parse(cleaned); } catch (_) {}
 
-  // Collect all [...] substrings and try each, longest first
-  const arrCandidates = [];
-  for (let i = 0; i < cleaned.length; i++) {
-    if (cleaned[i] === '[') {
-      for (let j = cleaned.length; j > i; j--) {
-        if (cleaned[j - 1] === ']') {
-          arrCandidates.push(cleaned.slice(i, j));
-          break;
-        }
-      }
-    }
-  }
-  arrCandidates.sort((a, b) => b.length - a.length);
-  for (const candidate of arrCandidates) {
-    try { return JSON.parse(candidate); } catch (_) {}
-  }
+  // 2. Repaired parse
+  const repaired = repairJSON(cleaned);
+  try { return JSON.parse(repaired); } catch (_) {}
 
-  // Collect all {...} substrings and try each, longest first
-  const objCandidates = [];
-  for (let i = 0; i < cleaned.length; i++) {
-    if (cleaned[i] === '{') {
-      for (let j = cleaned.length; j > i; j--) {
-        if (cleaned[j - 1] === '}') {
-          objCandidates.push(cleaned.slice(i, j));
-          break;
+  // 3. Extract substrings — try array and object candidates, longest first
+  for (const [open, close] of [['[', ']'], ['{', '}']]) {
+    const candidates = [];
+    for (let i = 0; i < cleaned.length; i++) {
+      if (cleaned[i] === open) {
+        for (let j = cleaned.length; j > i; j--) {
+          if (cleaned[j - 1] === close) {
+            candidates.push(cleaned.slice(i, j));
+            break;
+          }
         }
       }
     }
-  }
-  objCandidates.sort((a, b) => b.length - a.length);
-  for (const candidate of objCandidates) {
-    try { return JSON.parse(candidate); } catch (_) {}
+    candidates.sort((a, b) => b.length - a.length);
+    for (const candidate of candidates) {
+      try { return JSON.parse(candidate); } catch (_) {}
+      // Try repaired version of the candidate too
+      try { return JSON.parse(repairJSON(candidate)); } catch (_) {}
+    }
   }
 
   return fallback;
@@ -91,13 +108,16 @@ async function hermesReason(context, task) {
  */
 async function hermesPlan(goalText, { goalId } = {}) {
   console.log('[Hermes/Elira] Planning goal:', goalText.substring(0, 80));
+  const { formatContext: userCtx } = require('../user-model');
+  const userContext = userCtx();
+  const contextPrefix = userContext ? `${userContext}\n\n` : '';
   const messages = [{
     role: 'user',
-    content: `I need you to design a building plan for this goal:\n\n${wrapInput(goalText)}\n\nDecompose it into 3-7 floors. Each floor must have a name, description, successCondition, deliverable, and dependsOn.\n\nCRITICAL: Return ONLY a valid JSON array. No markdown, no explanation, just the JSON.\nFormat: [{"name":"Floor Name","description":"What this floor does","successCondition":"How to verify it is done","deliverable":"What concrete files/artifacts David should produce","dependsOn":[]}]\n\ndependsOn is an array of floor numbers (1-indexed) this floor depends on. Use [] if none. Example: Floor 3 builds on Floor 1's output → "dependsOn":[1]`
+    content: `${contextPrefix}I need you to design a building plan for this goal:\n\n${wrapInput(goalText)}\n\nDecompose it into 3-7 floors. Each floor must have a name, description, successCondition, deliverable, and dependsOn.\n\nFor any floor with a frontend/UI deliverable, the successCondition must include design intent alignment (CSS variables used, correct typography, elevation model respected).\n\nCRITICAL: Return ONLY a valid JSON array. No markdown, no explanation, just the JSON.\nFormat: [{"name":"Floor Name","description":"What this floor does","successCondition":"How to verify it is done","deliverable":"What concrete files/artifacts David should produce","dependsOn":[]}]\n\ndependsOn is an array of floor numbers (1-indexed) this floor depends on. Use [] if none. Example: Floor 3 builds on Floor 1's output → "dependsOn":[1]`
   }];
   const reply = await chat(messages, {
     model: config.eliraModel,
-    system: SOUL + '\n\nYou are in ELIRA MODE. You are designing a building plan.',
+    system: SOUL + '\n\n' + getDesignContext('full') + '\n\nYou are in ELIRA MODE. You are designing a building plan.',
     isBuildingTask: true,
     goalId,
     agent: 'Elira',
@@ -145,20 +165,34 @@ async function hermesPlan(goalText, { goalId } = {}) {
  */
 async function hermesApprove(floor, davidOutput, { goalId } = {}) {
   console.log(`[Hermes/Elira] Reviewing floor: ${floor.name}`);
+  const { formatContext: userCtx } = require('../user-model');
+  const userContext = userCtx();
+  const contextPrefix = userContext ? `${userContext}\n\n` : '';
   const messages = [{
     role: 'user',
-    content: `Review this deliverable.\n\nFloor: ${wrapInput(floor.name)}\nDescription: ${wrapInput(floor.description)}\nSuccess Condition: ${wrapInput(floor.success_condition || floor.successCondition || 'Meets description')}\nExpected Deliverable: ${wrapInput(floor.deliverable || 'Complete implementation')}\n\nDavid's Output:\n${wrapInput(typeof davidOutput === 'string' ? davidOutput : JSON.stringify(davidOutput, null, 2), 8000)}\n\nCRITICAL: Return ONLY valid JSON. No markdown, no explanation.\nFormat: {"approved": true/false, "feedback": "your feedback here", "fixes": ["specific change 1", "specific change 2"]}`
+    content: `${contextPrefix}Review this deliverable.\n\nFloor: ${wrapInput(floor.name)}\nDescription: ${wrapInput(floor.description)}\nSuccess Condition: ${wrapInput(floor.success_condition || floor.successCondition || 'Meets description')}\nExpected Deliverable: ${wrapInput(floor.deliverable || 'Complete implementation')}\n\nDavid's Output:\n${wrapInput(typeof davidOutput === 'string' ? davidOutput : JSON.stringify(davidOutput, null, 2), 8000)}\n\nIf this floor produced frontend/UI files, check for design intent violations (hardcoded hex, wrong typography, misuse of --accent) in addition to functional correctness.\n\nCRITICAL: Return ONLY valid JSON. No markdown, no explanation.\nFormat: {"approved": true/false, "feedback": "your feedback here", "fixes": ["specific change 1", "specific change 2"]}`
   }];
   const reply = await chat(messages, {
     model: config.eliraModel,
-    system: SOUL + '\n\nYou are in ELIRA MODE. You are reviewing a build for approval.',
+    system: SOUL + '\n\n' + getDesignContext('build') + '\n\nYou are in ELIRA MODE. You are reviewing a build for approval.',
     isBuildingTask: true,
     goalId: goalId || floor.goal_id,
     floorId: floor.id,
     agent: 'Elira',
   });
 
-  const parsed = parseJSON(reply, null);
+  let parsed = parseJSON(reply, null);
+
+  // Retry once with strict prompt if parse failed
+  if (!parsed || typeof parsed.approved === 'undefined') {
+    console.warn(`[Hermes/Elira] Approve JSON parse failed, retrying. Raw start: ${reply.substring(0, 150)}`);
+    const retryReply = await chat(
+      [{ role: 'user', content: `${messages[0].content}\n\nPREVIOUS ATTEMPT FAILED TO PARSE. Return ONLY valid JSON: {"approved":true,"feedback":"...","fixes":[]}` }],
+      { system: 'You review code deliverables. Return ONLY valid JSON. No other text.', model: config.eliraModel, isBuildingTask: true, goalId: goalId || floor.goal_id, floorId: floor.id, agent: 'Elira' }
+    );
+    parsed = parseJSON(retryReply, null);
+  }
+
   const result = validateSchema(parsed, APPROVE_SCHEMA);
 
   // Normalize optional fields
@@ -182,14 +216,25 @@ async function hermesFix(floor, error, previousOutput, { goalId } = {}) {
   }];
   const reply = await chat(messages, {
     model: config.eliraModel,
-    system: SOUL + '\n\nYou are in STEVEN MODE. Diagnose the root cause and produce working patches.',
+    system: SOUL + '\n\n' + getDesignContext('validate') + '\n\nYou are in STEVEN MODE. Diagnose the root cause and produce working patches.',
     isBuildingTask: true,
     goalId: goalId || floor.goal_id,
     floorId: floor.id,
     agent: 'Steven',
   });
 
-  const parsed = parseJSON(reply, null);
+  let parsed = parseJSON(reply, null);
+
+  // Retry once with strict prompt if parse failed
+  if (!parsed || !parsed.patches) {
+    console.warn(`[Hermes/Steven] Fix JSON parse failed, retrying. Raw start: ${reply.substring(0, 150)}`);
+    const retryReply = await chat(
+      [{ role: 'user', content: `${messages[0].content}\n\nPREVIOUS ATTEMPT FAILED TO PARSE. Return ONLY valid JSON: {"diagnosis":"...","patches":[{"file":"...","action":"create","content":"..."}]}` }],
+      { system: 'You fix broken code. Return ONLY valid JSON. No other text.', model: config.eliraModel, isBuildingTask: true, goalId: goalId || floor.goal_id, floorId: floor.id, agent: 'Steven' }
+    );
+    parsed = parseJSON(retryReply, null);
+  }
+
   const result = validateSchema(parsed, FIX_SCHEMA);
 
   // Normalize optional fields
@@ -207,9 +252,33 @@ async function hermesFix(floor, error, previousOutput, { goalId } = {}) {
  */
 async function hermesChat(messages, systemOverride = null) {
   console.log('[Hermes] Chat request');
+  const designCtx = getDesignContext('full');
+
+  // Inject live goal/floor context so the model can answer status questions directly
+  let goalContext = '';
+  try {
+    const { listGoals, listFloors } = require('../db');
+    const goals = listGoals();
+    if (goals.length > 0) {
+      const lines = goals.slice(0, 10).map(g => {
+        const floors = listFloors(g.id);
+        const live = floors.filter(f => f.status === 'live').length;
+        const blocked = floors.filter(f => f.status === 'blocked').length;
+        const safeName = g.text.replace(/[\n\r]/g, ' ').substring(0, 80);
+        return `- "${safeName}" [${g.status}] — ${floors.length} floors (${live} live, ${blocked} blocked)`;
+      });
+      goalContext = `\n\nCurrent Goals:\n${lines.join('\n')}`;
+    }
+  } catch (_) {}
+
+  const systemPrompt = (systemOverride
+    ? SOUL + '\n\n' + designCtx + '\n\n' + systemOverride
+    : SOUL + '\n\n' + designCtx) + goalContext
+    + '\n\nIMPORTANT: Respond with plain text only. Never output tool_call, invoke, or function_call tags.';
+
   const reply = await chat(messages, {
     model: config.eliraModel,
-    system: systemOverride ? SOUL + '\n\n' + systemOverride : SOUL,
+    system: systemPrompt,
     agent: 'Elira',
   });
   return reply;

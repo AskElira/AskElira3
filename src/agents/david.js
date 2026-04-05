@@ -4,31 +4,27 @@ const workspace = require('../pipeline/workspace');
 const { parseJSON } = require('../hermes/index');
 const { wrapInput } = require('../hermes/utils');
 const { validateSchema, DAVID_BUILD_SCHEMA } = require('../schema-validator');
+const { getDesignContext } = require('../hermes/design-intent');
 
-const DAVID_SYSTEM = `You are David, the builder agent for AskElira 3.
+const DAVID_SYSTEM = `You are David, the builder agent. You output ONLY JSON. Never output anything except a JSON object.
 
-Your job is to take a floor description and Alba's research notes, then produce REAL, WORKING FILES.
+Your entire response must be a single JSON object. No text before it. No text after it. No markdown fences.
 
-Rules:
-1. Your output must be COMPLETE — no stubs, no "TODO" placeholders, no "implement later"
-2. Write real, working code that can be executed
-3. If building a Node.js app, include package.json
-4. If building a web app, include HTML, CSS, and JS files
-5. Include ALL necessary files for the deliverable to work
-6. Format your output as a JSON object with files
+The JSON object has exactly two keys:
+- "summary": a one-sentence description of what you built
+- "files": an object where each key is a filename and each value is the complete file content as a string
 
-CRITICAL: Return ONLY valid JSON. No markdown wrapping, no explanation outside the JSON.
-Format:
-{
-  "summary": "Brief summary of what was built",
-  "files": {
-    "filename.js": "file content here",
-    "another/path.json": "content here"
-  }
-}
+Example of your ENTIRE response (nothing else):
+{"summary":"Built a hello world app","files":{"app.js":"console.log('hello');","package.json":"{\\n  \\"name\\": \\"app\\"\\n}"}}
 
-Every file must have complete, working content. No file should contain TODO, FIXME, or placeholder text.
-If you are writing code, it must be syntactically correct and logically complete.`;
+Rules for the files you create:
+- Every file must have complete, working content
+- No TODO, FIXME, or placeholder text
+- Code must be syntactically correct
+- Include ALL necessary files (package.json, requirements.txt, etc.)
+- For frontend: use CSS variables (var(--accent), var(--panel), etc.) not hardcoded hex
+
+IMPORTANT: Your response starts with { and ends with }. Nothing else.`;
 
 /**
  * Build the deliverable for a floor based on research.
@@ -73,9 +69,10 @@ ${wrapInput(vexFeedback)}`;
     userMessage += `\n\nExisting files: ${wrapInput(summary, 2000)}`;
   }
 
+  userMessage += `\n\n${getDesignContext('build')}`;
   userMessage += '\n\nBuild the complete deliverable. Return JSON with all files.';
 
-  const reply = await chat(
+  let reply = await chat(
     [{ role: 'user', content: userMessage }],
     { system: DAVID_SYSTEM, maxTokens: 8192, goalId, floorId, agent: 'David' }
   );
@@ -88,6 +85,22 @@ ${wrapInput(vexFeedback)}`;
     const filesMap = extractFilesFromMarkdown(reply);
     if (Object.keys(filesMap).length > 0) {
       parsed = { summary: 'Built from markdown output', files: filesMap };
+    }
+  }
+
+  // Retry once with strict JSON-only prompt if parse failed
+  if (!parsed || !parsed.files) {
+    console.warn(`[David] JSON parse failed, retrying with strict prompt. Raw start: ${reply.substring(0, 150)}`);
+    reply = await chat(
+      [{ role: 'user', content: `${userMessage}\n\nPREVIOUS ATTEMPT FAILED TO PARSE. You MUST return ONLY a JSON object. No text before or after. No markdown fences. Just: {"summary":"...","files":{"filename.ext":"content"}}` }],
+      { system: 'You are a code builder. Return ONLY valid JSON with "summary" and "files" keys. No other text.', maxTokens: 8192, goalId, floorId, agent: 'David' }
+    );
+    parsed = parseJSON(reply, null);
+    if (!parsed || !parsed.files) {
+      const filesMap = extractFilesFromMarkdown(reply);
+      if (Object.keys(filesMap).length > 0) {
+        parsed = { summary: 'Built from markdown output (retry)', files: filesMap };
+      }
     }
   }
 
@@ -121,19 +134,38 @@ ${wrapInput(vexFeedback)}`;
  */
 function extractFilesFromMarkdown(text) {
   const files = {};
-  // Pattern: ```lang\n// filename\ncontent\n```
-  const blockRegex = /```[\w]*\n(?:\/\/\s*|#\s*)?(\S+\.[\w.]+)\n([\s\S]*?)```/g;
   let match;
+
+  // Pattern 1: ```lang\n// filename\ncontent\n```
+  const blockRegex = /```[\w]*\n(?:\/\/\s*|#\s*)?(\S+\.[\w.]+)\n([\s\S]*?)```/g;
   while ((match = blockRegex.exec(text)) !== null) {
     files[match[1]] = match[2].trim();
   }
-  // Pattern: ### filename.js\n```\ncontent\n```
+
+  // Pattern 2: ### filename.js\n```\ncontent\n```
   const headerRegex = /###?\s+(\S+\.[\w.]+)\s*\n```[\w]*\n([\s\S]*?)```/g;
   while ((match = headerRegex.exec(text)) !== null) {
-    if (!files[match[1]]) {
-      files[match[1]] = match[2].trim();
-    }
+    if (!files[match[1]]) files[match[1]] = match[2].trim();
   }
+
+  // Pattern 3: **filename.js**\n```\ncontent\n```  (MiniMax bold headers)
+  const boldRegex = /\*\*(\S+\.[\w.]+)\*\*\s*\n```[\w]*\n([\s\S]*?)```/g;
+  while ((match = boldRegex.exec(text)) !== null) {
+    if (!files[match[1]]) files[match[1]] = match[2].trim();
+  }
+
+  // Pattern 4: `filename.js`:\n```\ncontent\n```  (backtick filename, must be at line start)
+  const backtickRegex = /(?:^|\n)`(\S+\.[\w.]+)`[:\s]*\n```[\w]*\n([\s\S]*?)```/g;
+  while ((match = backtickRegex.exec(text)) !== null) {
+    if (!files[match[1]]) files[match[1]] = match[2].trim();
+  }
+
+  // Pattern 5: File: filename.js\n```\ncontent\n```
+  const fileHeaderRegex = /(?:File|Filename|Path)[:\s]+(\S+\.[\w.]+)\s*\n```[\w]*\n([\s\S]*?)```/gi;
+  while ((match = fileHeaderRegex.exec(text)) !== null) {
+    if (!files[match[1]]) files[match[1]] = match[2].trim();
+  }
+
   return files;
 }
 

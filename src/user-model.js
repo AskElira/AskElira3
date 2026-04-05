@@ -83,4 +83,19 @@ function touch() {
   save(model);
 }
 
-module.exports = { get, update, addCompletedBuild, addSuggestion, clearSuggestion, touch };
+/**
+ * Returns a compact user context string for injection into agent prompts.
+ * Only includes non-empty fields so agents get signal, not noise.
+ */
+function formatContext() {
+  const model = load();
+  const parts = [];
+  if (model.name) parts.push(`User: ${model.name}`);
+  if (model.techStack && model.techStack.length) parts.push(`Tech stack: ${model.techStack.join(', ')}`);
+  if (model.workflowPatterns && model.workflowPatterns.length) parts.push(`Workflow patterns: ${model.workflowPatterns.slice(0, 5).join(', ')}`);
+  if (model.completedBuilds && model.completedBuilds.length) parts.push(`Recent builds: ${model.completedBuilds.slice(0, 3).join('; ')}`);
+  if (model.painPoints && model.painPoints.length) parts.push(`Pain points: ${model.painPoints.slice(0, 3).join(', ')}`);
+  return parts.length ? `## User Context\n${parts.join('\n')}` : '';
+}
+
+module.exports = { get, update, formatContext, addCompletedBuild, addSuggestion, clearSuggestion, touch };

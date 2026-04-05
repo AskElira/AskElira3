@@ -111,15 +111,26 @@ function stripThinking(text) {
     .replace(/\[TOOL_CALL\][\s\S]*?\[\/TOOL_CALL\]/gi, '')
     .replace(/<minimax:tool_?call>[\s\S]*?<\/minimax:tool_?call>/gi, '')
     .replace(/```tool[\s\S]*?```/gi, '')
+    // Strip other model-specific wrapper tags (e.g. <response>, <output>, <result>)
+    .replace(/<\/?(?:response|output|result|reply|assistant)>/gi, '')
     .trim();
   // Unwrap <answer>...</answer> — some models wrap final output in this tag
   const answerMatch = out.match(/<answer>([\s\S]*?)<\/answer>/i);
   if (answerMatch) out = answerMatch[1].trim();
+  if (!out && text.length > 0) {
+    console.warn(`[LLM] stripThinking produced empty output from ${text.length} chars. Raw: ${text.substring(0, 300)}`);
+    // Last resort: strip only known model wrapper tags, preserve everything else
+    out = text
+      .replace(/<think>[\s\S]*?<\/think>/gi, '')
+      .replace(/<minimax:[\w_]+>[\s\S]*?<\/minimax:[\w_]+>/gi, '')
+      .replace(/<\/?(?:response|output|result|reply|assistant|invoke|parameter)>/gi, '')
+      .trim();
+  }
   return out;
 }
 
 // ── Timeout-protected fetch ─────────────────────────────────────────────────
-const LLM_TIMEOUT_MS = parseInt(process.env.LLM_TIMEOUT_MS || '60000', 10);   // 60s for cloud LLM
+const LLM_TIMEOUT_MS = parseInt(process.env.LLM_TIMEOUT_MS || '120000', 10);  // 120s for cloud LLM (complex builds need more)
 const OLLAMA_TIMEOUT_MS = parseInt(process.env.OLLAMA_TIMEOUT_MS || '30000', 10); // 30s for local
 
 function fetchWithTimeout(url, opts, timeoutMs) {
@@ -153,10 +164,40 @@ async function chat(messages, { model, system, maxTokens = 4096, isBuildingTask:
 
   const resolvedModel = model || config.agentModel;
 
-  if (config.isAnthropic && !config.isOpenAI) {
-    return anthropicChat(messages, { model: resolvedModel, system, maxTokens, goalId, floorId, agent });
+  const callProvider = () => {
+    if (config.isAnthropic && !config.isOpenAI) {
+      return anthropicChat(messages, { model: resolvedModel, system, maxTokens, goalId, floorId, agent });
+    }
+    return openaiChat(messages, { model: resolvedModel, system, maxTokens, goalId, floorId, agent });
+  };
+
+  const reply = await callProvider();
+
+  // Retry once if reply is empty/whitespace (MiniMax sometimes returns only tool_call tags with no text)
+  if (!reply || !reply.trim()) {
+    console.warn(`[LLM] Empty reply from ${resolvedModel}, retrying with anti-tool-call hint...`);
+    // Append a hint to the last user message to prevent tool-call-only responses
+    const retryMessages = messages.map((m, i) =>
+      i === messages.length - 1 && m.role === 'user'
+        ? { ...m, content: m.content + '\n\n[Respond with plain text only. Do not use tool calls or function calls.]' }
+        : m
+    );
+    const retrySystem = system ? system + '\n\nIMPORTANT: Respond with plain text only. Do NOT output tool_call, invoke, or function_call tags.' : system;
+    const retryFn = () => {
+      if (config.isAnthropic && !config.isOpenAI) {
+        return anthropicChat(retryMessages, { model: resolvedModel, system: retrySystem, maxTokens, goalId, floorId, agent });
+      }
+      return openaiChat(retryMessages, { model: resolvedModel, system: retrySystem, maxTokens, goalId, floorId, agent });
+    };
+    const retry = await retryFn();
+    if (!retry) {
+      console.warn(`[LLM] Empty reply on retry — returning fallback`);
+      return '(No response generated. Please try again.)';
+    }
+    return retry;
   }
-  return openaiChat(messages, { model: resolvedModel, system, maxTokens, goalId, floorId, agent });
+
+  return reply;
 }
 
 async function anthropicChat(messages, { model, system, maxTokens, goalId, floorId, agent }) {

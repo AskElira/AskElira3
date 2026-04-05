@@ -40,3 +40,38 @@ test('preserves newlines and regular whitespace', () => {
   const result = wrapInput('line one\nline two');
   assert.ok(result.includes('line one\nline two'));
 });
+
+// ── parseJSON tests ──
+
+const { parseJSON } = require('../../src/hermes/index');
+
+test('parseJSON: parses clean JSON', () => {
+  const r = parseJSON('{"valid": true, "score": 80}', null);
+  assert.deepEqual(r, { valid: true, score: 80 });
+});
+
+test('parseJSON: strips markdown fences', () => {
+  const r = parseJSON('```json\n{"valid": true}\n```', null);
+  assert.deepEqual(r, { valid: true });
+});
+
+test('parseJSON: handles trailing commas', () => {
+  const r = parseJSON('{"valid": true, "issues": ["a", "b",],}', null);
+  assert.deepEqual(r, { valid: true, issues: ['a', 'b'] });
+});
+
+test('parseJSON: handles single-quoted strings', () => {
+  const r = parseJSON("{'valid': true, 'score': 70}", null);
+  assert.deepEqual(r, { valid: true, score: 70 });
+});
+
+test('parseJSON: extracts JSON from surrounding text', () => {
+  const r = parseJSON('Here is my answer:\n{"approved": true, "feedback": "looks good"}\nThat is all.', null);
+  assert.deepEqual(r, { approved: true, feedback: 'looks good' });
+});
+
+test('parseJSON: returns fallback on garbage', () => {
+  assert.equal(parseJSON('not json at all', 'fallback'), 'fallback');
+  assert.equal(parseJSON('', null), null);
+  assert.equal(parseJSON(null, 'fb'), 'fb');
+});

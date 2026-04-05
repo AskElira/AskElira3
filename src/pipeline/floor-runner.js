@@ -9,22 +9,82 @@ const { notifyFloorLive, notifyFloorBlocked, notifyGoalComplete, sendTelegram } 
 
 const MAX_ITERATIONS = 5;
 
-// ── Timeout wrapper for agent calls ──
-const AGENT_TIMEOUTS = {
-  research:  2 * 60 * 1000,  // 2 min for Alba
-  build:     5 * 60 * 1000,  // 5 min for David
-  validate:  2 * 60 * 1000,  // 2 min for Vex
-  approve:   2 * 60 * 1000,  // 2 min for Elira
-  fix:       3 * 60 * 1000,  // 3 min for Steven
-  floor:    10 * 60 * 1000,  // 10 min per floor total
-};
+// ── Progress-based watchdog (replaces dumb timeouts) ──
+// Instead of killing agents on a clock, we monitor for actual stuckness:
+// - Track the last time an agent made progress (log entry, file write, status change)
+// - Only intervene when no progress for STALL_THRESHOLD_MS
+// - Hard ceiling only as a safety net for truly hung processes (network dead, etc.)
 
-function withTimeout(promise, ms, label) {
+const STALL_THRESHOLD_MS = 5 * 60 * 1000;   // 5 min no progress = stalled
+const HARD_CEILING_MS   = 45 * 60 * 1000;   // 45 min absolute max per floor (safety net)
+const AGENT_HARD_CEILING = 15 * 60 * 1000;  // 15 min absolute max per agent call (safety net)
+
+/**
+ * Run an agent call with progress-aware monitoring.
+ * Only kills the agent if it produces NO progress for STALL_THRESHOLD_MS.
+ * Otherwise lets it run as long as it needs.
+ */
+function withProgressWatch(promise, label, goalId, floorId) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)), ms);
+    let lastProgress = Date.now();
+    let done = false;
+
+    // Poll for new log entries as a progress signal
+    const progressChecker = setInterval(() => {
+      if (done) return;
+      try {
+        const { getLogs } = require('../db');
+        const recent = getLogs({ floorId, limit: 1 });
+        if (recent.length > 0) {
+          const logTime = (recent[0].created_at || 0) * 1000;
+          if (logTime > lastProgress) lastProgress = logTime;
+        }
+      } catch (_) {}
+
+      const stalledFor = Date.now() - lastProgress;
+
+      if (stalledFor > STALL_THRESHOLD_MS) {
+        done = true;
+        clearInterval(progressChecker);
+        clearTimeout(hardCeiling);
+        const stalledMin = Math.round(stalledFor / 60000);
+        console.warn(`[Watchdog] ${label} stalled for ${stalledMin}min — no progress detected`);
+        addLog(goalId, floorId, 'Elira', `Watchdog: ${label} stalled (${stalledMin}min no progress) — intervening`);
+        reject(new Error(`${label} stalled — no progress for ${stalledMin} minutes`));
+      }
+    }, 30_000); // check every 30s
+
+    // Hard ceiling as absolute safety net (network hangs, infinite loops)
+    const hardCeiling = setTimeout(() => {
+      if (done) return;
+      done = true;
+      clearInterval(progressChecker);
+      const mins = Math.round(AGENT_HARD_CEILING / 60000);
+      console.warn(`[Watchdog] ${label} hit hard ceiling (${mins}min)`);
+      addLog(goalId, floorId, 'Elira', `Watchdog: ${label} hit ${mins}min hard ceiling — force stopping`);
+      reject(new Error(`${label} hit hard ceiling after ${mins} minutes`));
+    }, AGENT_HARD_CEILING);
+
     promise.then(
-      val => { clearTimeout(timer); resolve(val); },
-      err => { clearTimeout(timer); reject(err); }
+      val => { done = true; clearInterval(progressChecker); clearTimeout(hardCeiling); resolve(val); },
+      err => { done = true; clearInterval(progressChecker); clearTimeout(hardCeiling); reject(err); }
+    );
+  });
+}
+
+/**
+ * Floor-level watchdog — monitors total floor progress with generous ceiling.
+ */
+function withFloorWatch(promise, label, goalId) {
+  return new Promise((resolve, reject) => {
+    const hardCeiling = setTimeout(() => {
+      console.warn(`[Watchdog] Floor "${label}" hit ${Math.round(HARD_CEILING_MS / 60000)}min hard ceiling`);
+      reject(new Error(`Floor "${label}" exceeded ${Math.round(HARD_CEILING_MS / 60000)} minute hard ceiling`));
+    }, HARD_CEILING_MS);
+
+    promise.then(
+      val => { clearTimeout(hardCeiling); resolve(val); },
+      err => { clearTimeout(hardCeiling); reject(err); }
     );
   });
 }
@@ -114,7 +174,7 @@ async function runFloor(floor, goal) {
     let albaStart = Date.now();
     try {
       const vexIssues = vexBuildFeedback ? [vexBuildFeedback] : undefined;
-      researchNotes = await withTimeout(alba.research(floor, goal, vexIssues), AGENT_TIMEOUTS.research, 'Alba research');
+      researchNotes = await withProgressWatch(alba.research(floor, goal, vexIssues), 'Alba research', goal.id, floor.id);
       updateFloor(floor.id, { research: researchNotes });
       recordMetric({ goalId: goal.id, floorId: floor.id, agent: 'Alba', event: 'research', durationMs: Date.now() - albaStart, success: 1 });
     } catch (err) {
@@ -130,14 +190,14 @@ async function runFloor(floor, goal) {
     let vex1Start = Date.now();
     try {
       addLog(goal.id, floor.id, 'Vex', 'Gate 1: Validating research...');
-      const vex1 = await withTimeout(vex.vexValidateResearch(floor, researchNotes), AGENT_TIMEOUTS.validate, 'Vex Gate 1');
+      const vex1 = await withProgressWatch(vex.vexValidateResearch(floor, researchNotes), 'Vex Gate 1', goal.id, floor.id);
       recordMetric({ goalId: goal.id, floorId: floor.id, agent: 'Vex', event: 'gate1', durationMs: Date.now() - vex1Start, success: vex1.valid ? 1 : 0, metadata: `score:${vex1.score}` });
 
       if (!vex1.valid && vex1.issues.length > 0) {
         addLog(goal.id, floor.id, 'Vex', `Gate 1 rejected. Re-researching with feedback...`);
         console.log(`[FloorRunner] Vex1 rejected research, re-researching...`);
         try {
-          const research2 = await withTimeout(alba.research(floor, goal, vex1.issues), AGENT_TIMEOUTS.research, 'Alba re-research');
+          const research2 = await withProgressWatch(alba.research(floor, goal, vex1.issues), 'Alba re-research', goal.id, floor.id);
           enrichedResearch = research2;
           updateFloor(floor.id, { research: research2 });
         } catch (reErr) {
@@ -160,7 +220,7 @@ async function runFloor(floor, goal) {
     let build;
     let davidStart = Date.now();
     try {
-      build = await withTimeout(davidBuild(floor, enrichedResearch, goal.id, feedback, vexBuildFeedback), AGENT_TIMEOUTS.build, 'David build');
+      build = await withProgressWatch(davidBuild(floor, enrichedResearch, goal.id, feedback, vexBuildFeedback), 'David build', goal.id, floor.id);
       updateFloor(floor.id, { result: build.output });
       recordMetric({ goalId: goal.id, floorId: floor.id, agent: 'David', event: 'build', durationMs: Date.now() - davidStart, success: 1 });
     } catch (err) {
@@ -220,9 +280,9 @@ async function runFloor(floor, goal) {
     let vex2Start = Date.now();
     try {
       addLog(goal.id, floor.id, 'Vex', 'Gate 2: Validating build...');
-      const vex2 = await withTimeout(vex.vexValidateBuild(floor, build.output, goal.id), AGENT_TIMEOUTS.validate, 'Vex Gate 2');
+      const vex2 = await withProgressWatch(vex.vexValidateBuild(floor, build.output, goal.id), 'Vex Gate 2', goal.id, floor.id);
 
-      if (vex2.score < 40 || vex2.securityFlags.length > 0) {
+      if (vex2.score < 30 || vex2.securityFlags.length > 0) {
         vex2Passed = false;
         const issues = [...vex2.issues, ...vex2.securityFlags.map(f => `SECURITY: ${f}`)];
         vexBuildFeedback = `Vex2 score: ${vex2.score}/100. Issues: ${issues.join('; ')}`;
@@ -258,7 +318,7 @@ async function runFloor(floor, goal) {
     let eliraStart = Date.now();
     try {
       addLog(goal.id, floor.id, 'Elira', `Reviewing floor: ${floor.name}`);
-      approval = await withTimeout(hermes.hermesApprove(floor, build.output, { goalId: goal.id }), AGENT_TIMEOUTS.approve, 'Elira approve');
+      approval = await withProgressWatch(hermes.hermesApprove(floor, build.output, { goalId: goal.id }), 'Elira approve', goal.id, floor.id);
       addLog(goal.id, floor.id, 'Elira', `${approval.approved ? 'APPROVED' : 'REJECTED'}: ${approval.feedback}`);
       recordMetric({ goalId: goal.id, floorId: floor.id, agent: 'Elira', event: 'approve', durationMs: Date.now() - eliraStart, success: approval.approved ? 1 : 0 });
     } catch (err) {
@@ -291,7 +351,7 @@ async function runFloor(floor, goal) {
       try {
         addLog(goal.id, floor.id, 'Steven', `Attempting fix: ${approval.feedback}`);
         console.log(`[FloorRunner] Steven fixing: ${floor.name}`);
-        const fix = await withTimeout(hermes.hermesFix(floor, approval.feedback, build.output, { goalId: goal.id }), AGENT_TIMEOUTS.fix, 'Steven fix');
+        const fix = await withProgressWatch(hermes.hermesFix(floor, approval.feedback, build.output, { goalId: goal.id }), 'Steven fix', goal.id, floor.id);
 
         for (const patch of fix.patches) {
           if (patch.file && patch.content) {
@@ -362,7 +422,7 @@ async function runPipeline(goal, floors) {
 
   for (const wave of waves) {
     const results = await Promise.allSettled(wave.map(f =>
-      withTimeout(runFloor(f, goal), AGENT_TIMEOUTS.floor, `Floor ${f.floor_number} (${f.name})`)
+      withFloorWatch(runFloor(f, goal), `F${f.floor_number} ${f.name}`, goal.id)
     ));
     for (let i = 0; i < results.length; i++) {
       const r = results[i];

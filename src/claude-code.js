@@ -15,7 +15,6 @@ const path = require('path');
 
 const CLAUDE_PATH = process.env.CLAUDE_PATH || 'claude';
 const CLAUDE_TIMEOUT_MS = parseInt(process.env.CLAUDE_TIMEOUT_MS || '300000', 10); // 5 min default
-const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || '';
 
 /**
  * Run a prompt through Claude Code CLI.
@@ -30,26 +29,19 @@ function claudeCode(prompt, { cwd, timeoutMs, model } = {}) {
   return new Promise((resolve) => {
     const start = Date.now();
 
-    if (!ANTHROPIC_KEY) {
-      return resolve({
-        success: false,
-        output: '',
-        error: 'ANTHROPIC_API_KEY not set — Claude Code requires it',
-        durationMs: 0,
-      });
-    }
-
-    const args = ['-p', '--output-format', 'text'];
+    const args = ['-p', '--output-format', 'text', '--dangerously-skip-permissions'];
     if (model) args.push('--model', model);
+
+    // Strip ANTHROPIC_API_KEY from child env — Claude Code uses its own OAuth auth.
+    // A stale/invalid key in the environment causes "Invalid API key" errors.
+    const childEnv = { ...process.env };
+    delete childEnv.ANTHROPIC_API_KEY;
 
     const child = execFile(CLAUDE_PATH, args, {
       cwd: cwd || process.cwd(),
       timeout: timeoutMs || CLAUDE_TIMEOUT_MS,
       maxBuffer: 10 * 1024 * 1024, // 10MB
-      env: {
-        ...process.env,
-        ANTHROPIC_API_KEY: ANTHROPIC_KEY,
-      },
+      env: childEnv,
     }, (err, stdout, stderr) => {
       const durationMs = Date.now() - start;
       if (err) {
@@ -82,7 +74,6 @@ function claudeCode(prompt, { cwd, timeoutMs, model } = {}) {
  * @returns {Promise<boolean>}
  */
 async function isAvailable() {
-  if (!ANTHROPIC_KEY) return false;
   try {
     const result = await claudeCode('respond with just the word "ok"', { timeoutMs: 15000 });
     return result.success;

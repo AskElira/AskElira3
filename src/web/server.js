@@ -290,15 +290,13 @@ async function handleTelegramMessage(userText) {
       buildConfirmState = { waiting: false, goalText: null };
       await tgReply(`🔨 Starting: "${goalText}"…`);
       try {
-        const { setSilent } = require('../notify');
         const goal = createGoal(goalText);
         addLog(goal.id, null, 'Hermes', `Goal confirmed via Telegram: ${goalText}`);
         setImmediate(async () => {
           try {
-            setSilent(true);
             const floors = await runPlanner(goal);
+            await tgReply(`📋 *Plan ready* — ${floors.length} floors:\n${floors.map((f, i) => `${i + 1}. ${f.name}`).join('\n')}\n\nBuilding now...`);
             await runPipeline(goal, floors);
-            setSilent(false);
             const { listFloors: lf } = require('../db');
             const done = lf(goal.id);
             const live = done.filter(f => f.status === 'live').length;
@@ -306,7 +304,6 @@ async function handleTelegramMessage(userText) {
             const files = workspace.listFiles(goal.id);
             await tgReply(`✅ *Done*\n${floors.map((f, i) => `${i + 1}. ${f.name}`).join('\n')}\n\n${live}/${floors.length} floors live · ${files.length} files shipped${blocked ? `\n⚠️ ${blocked} blocked` : ''}`);
           } catch (err) {
-            setSilent(false);
             tgReply(`❌ Build failed: ${err.message}`);
           }
         });
