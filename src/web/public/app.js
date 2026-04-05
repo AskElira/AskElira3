@@ -787,7 +787,7 @@ async function sendChat() {
   }
 
   // ── Action: Claude Code ──
-  var claudeMatch = text.match(/^(?:claude|claude code|ask claude|use claude)\s*(.*)/i);
+  var claudeMatch = text.match(/^\/?\s*(?:claude[_ ]?code|claude|ask claude|use claude)\s*(.*)/i);
   if (claudeMatch) {
     var claudeTask = claudeMatch[1].trim() || 'What can you help with?';
     chatHistory.push({ role: 'user', content: text });

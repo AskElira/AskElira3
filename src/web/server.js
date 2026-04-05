@@ -441,7 +441,7 @@ async function handleTelegramMessage(userText) {
   }
 
   // ── Fast-path: Claude Code ──
-  const claudeMatch = userText.match(/^(?:claude|claude code|ask claude|use claude)\s*(.*)/i);
+  const claudeMatch = userText.match(/^\/?\s*(?:claude[_ ]?code|claude|ask claude|use claude)\s*(.*)/i);
   if (claudeMatch) {
     const task = claudeMatch[1].trim() || 'What can you help with?';
     const { claudeCode } = require('../claude-code');
