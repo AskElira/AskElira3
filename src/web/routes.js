@@ -387,6 +387,16 @@ router.post('/api/digest/send', async (req, res) => {
   }
 });
 
+router.post('/api/friday-reminder/send', async (req, res) => {
+  try {
+    const { triggerFridayReminder } = require('../scheduler');
+    res.json({ message: 'Friday journal reminder sending...' });
+    setImmediate(() => triggerFridayReminder().catch(err => console.error('[Friday] Error:', err.message)));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── User Model ──
 
 router.get('/api/user-model', (req, res) => {
@@ -469,6 +479,53 @@ router.get('/api/status', (req, res) => {
       llmTotalCalls: usage.calls,
       uptime: Math.round(process.uptime()),
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Recipes ──
+
+router.get('/api/recipes', (req, res) => {
+  try {
+    const { listRecipes } = require('../recipes/index');
+    res.json(listRecipes());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/recipes/:id', (req, res) => {
+  try {
+    const { getRecipe } = require('../recipes/index');
+    const recipe = getRecipe(req.params.id);
+    if (!recipe) return res.status(404).json({ error: 'Recipe not found' });
+    res.json(recipe);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Memory ──
+
+router.get('/api/memory', (req, res) => {
+  try {
+    const { listMemories, countMemories } = require('../memory-store');
+    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const offset = parseInt(req.query.offset) || 0;
+    res.json({ memories: listMemories(limit, offset), total: countMemories() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/memory/search', (req, res) => {
+  try {
+    const { searchMemory } = require('../memory-store');
+    const q = (req.query.q || '').trim();
+    if (!q) return res.json([]);
+    const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+    res.json(searchMemory(q, limit));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

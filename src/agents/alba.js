@@ -4,6 +4,7 @@ const { addLog } = require('../db');
 const { wrapInput } = require('../hermes/utils');
 const { createBreaker, CircuitOpenError } = require('../circuit-breaker');
 const { getDesignContext } = require('../hermes/design-intent');
+const { searchMemory } = require('../memory-store');
 
 const tavilyBreaker = createBreaker('tavily');
 const braveBreaker = createBreaker('brave');
@@ -119,6 +120,18 @@ Deliverable: ${wrapInput(floor.deliverable || 'Complete implementation')}`;
   if (vexFeedback && vexFeedback.length > 0) {
     msg += `\n\nVex Validation Issues (must address these):\n${vexFeedback.map((f, i) => `${i + 1}. ${wrapInput(f)}`).join('\n')}`;
   }
+
+  // Inject prior successful floors as context
+  try {
+    const priorWork = searchMemory(`${goalText} ${floorName} ${floorDescription}`, 3);
+    if (priorWork.length > 0) {
+      msg += '\n\n## Prior Successful Work (from cross-goal memory)\n';
+      msg += 'These floors were completed successfully in prior builds — reuse patterns where applicable:\n';
+      for (const m of priorWork) {
+        msg += `- **${m.floor_name}** (goal: "${m.goal_text.substring(0, 60)}"): ${m.summary || m.deliverable}\n`;
+      }
+    }
+  } catch (_) {}
 
   msg += `\n\n${getDesignContext('research')}`;
   msg += '\n\nProvide structured research notes. Think about what information, patterns, and best practices David needs to build the deliverable.';

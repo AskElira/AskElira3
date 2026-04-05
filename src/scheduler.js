@@ -71,6 +71,23 @@ function checkAndRun() {
     console.log(`[Scheduler] ${TARGET_HOUR}:00 ${USER_TZ} — running daily digest`);
     runDigest().catch(err => console.error('[Scheduler] Digest failed:', err.message));
   }
+
+  // ── Friday Journal Reminder: 6pm every Friday ──
+  const FRIDAY_HOUR = 18;
+  const lastFridayDate = recall('lastFridayReminder');
+  let localDay;
+  try {
+    const dayFormatter = new Intl.DateTimeFormat('en-US', { timeZone: USER_TZ, weekday: 'long' });
+    localDay = dayFormatter.format(now);
+  } catch (_) {
+    localDay = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][now.getDay()];
+  }
+
+  if (localDay === 'Friday' && localHour === FRIDAY_HOUR && lastFridayDate !== localDateStr) {
+    remember('lastFridayReminder', localDateStr);
+    console.log(`[Scheduler] Friday 6pm — sending journal reminder`);
+    sendFridayReminder().catch(err => console.error('[Scheduler] Friday reminder failed:', err.message));
+  }
 }
 
 async function runDigest() {
@@ -206,10 +223,95 @@ ${articles.length ? `<div class="section"><h2>Hacker News</h2>${articles.map(a =
 </body></html>`;
 }
 
+// ── Friday Trading Journal Reminder ──
+
+async function sendFridayReminder() {
+  const recipient = DIGEST_RECIPIENT;
+  if (!recipient) {
+    console.log('[Scheduler] No DIGEST_EMAIL set — skipping Friday reminder');
+    return;
+  }
+
+  const date = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+  body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto; color: #222; background: #fafafa; }
+  .header { background: linear-gradient(135deg, #111, #1a1a2e); padding: 32px; text-align: center; }
+  .header h1 { margin: 0; color: #ffc53d; font-size: 24px; }
+  .header p { color: #888; margin: 8px 0 0; font-size: 13px; }
+  .content { padding: 32px; background: #fff; }
+  .prompt { background: #fffbf0; border-left: 4px solid #ffc53d; padding: 16px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; line-height: 1.7; }
+  .prompt strong { color: #333; }
+  .callout { background: #f0f7ff; border: 1px solid #d0e0f0; border-radius: 8px; padding: 16px 20px; margin: 20px 0; text-align: center; }
+  .footer { padding: 24px; text-align: center; font-size: 12px; color: #999; }
+</style></head>
+<body>
+<div class="header">
+  <h1>Trading Journal Reminder</h1>
+  <p>${date}</p>
+</div>
+<div class="content">
+  <p>Hey Alvin,</p>
+  <p>Another week in the markets is done. Take 10 minutes to reflect before the weekend:</p>
+
+  <div class="prompt">
+    <strong>This week's journal prompts:</strong><br><br>
+    1. What were your best and worst trades this week? What made the difference?<br><br>
+    2. Did you follow your trading plan? Where did you deviate and why?<br><br>
+    3. What patterns or setups worked? Which ones didn't?<br><br>
+    4. How was your emotional state during trading? Any revenge trades or FOMO?<br><br>
+    5. What's one thing you'll do differently next week?
+  </div>
+
+  <div class="callout">
+    <strong>Remember:</strong> The journal is where edge is found.<br>
+    Every top trader reviews their week. You should too.
+  </div>
+
+  <p>Have a great weekend.</p>
+  <p>— Elira</p>
+</div>
+<div class="footer">Sent by Elira via AskElira 3 · elira@agentmail.to · Every Friday at 6pm</div>
+</body></html>`;
+
+  const text = `Trading Journal Reminder — ${date}
+
+Hey Alvin,
+
+Another week in the markets is done. Take 10 minutes to reflect:
+
+1. What were your best and worst trades this week?
+2. Did you follow your trading plan?
+3. What patterns or setups worked?
+4. How was your emotional state during trading?
+5. What's one thing you'll do differently next week?
+
+The journal is where edge is found. Every top trader reviews their week.
+
+Have a great weekend.
+— Elira`;
+
+  await sendEmail({
+    to: recipient,
+    subject: `Trading Journal Reminder — ${date}`,
+    html,
+    text,
+  });
+
+  await sendTelegram(`*Friday Journal Reminder Sent* ✓\nTo: ${recipient}`);
+  console.log(`[Scheduler] Friday reminder sent to ${recipient}`);
+}
+
 // Manual trigger for testing
 async function triggerNow() {
   console.log('[Scheduler] Manual trigger');
   await runDigest();
 }
 
-module.exports = { startScheduler, stopScheduler, triggerNow };
+async function triggerFridayReminder() {
+  console.log('[Scheduler] Manual Friday reminder trigger');
+  await sendFridayReminder();
+}
+
+module.exports = { startScheduler, stopScheduler, triggerNow, triggerFridayReminder };

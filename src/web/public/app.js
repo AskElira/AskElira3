@@ -98,15 +98,8 @@ function setDot(id, on) {
   if (el) el.classList.toggle('on', !!on);
 }
 
-// ── User Model ──
-async function fetchUserModel() {
-  try {
-    var model = await api('/api/user-model');
-    renderUserModel(model);
-  } catch (err) {
-    // User model not available — ignore
-  }
-}
+// ── User Model (removed from sidebar — data still available via API) ──
+async function fetchUserModel() {}
 
 function renderUserModel(model) {
   if (!model) return;
@@ -177,7 +170,8 @@ function renderGoalList(goals) {
     el.innerHTML = '<div class="empty" style="height:100px"><p>No goals yet</p></div>';
     return;
   }
-  el.innerHTML = goals.map(function(g) {
+  el.innerHTML = goals.map(function(g, index) {
+    var num = index + 1;
     var floorInfo = g.floorCount > 0 ? g.floorsLive + '/' + g.floorCount : '';
     var pct = g.floorCount > 0 ? Math.round(g.floorsLive / g.floorCount * 100) : 0;
     var barColor = 'green';
@@ -189,6 +183,7 @@ function renderGoalList(goals) {
       : '';
 
     return '<div class="goal-item ' + (g.id === selectedGoalId ? 'active' : '') + '" data-id="' + g.id + '">' +
+      '<span class="goal-number">#' + num + '</span>' +
       '<span class="goal-text">' + esc(g.text) + '</span>' +
       '<div class="goal-meta">' +
         '<span class="badge ' + g.status + '">' + g.status.replace('_', ' ') + '</span>' +
@@ -913,6 +908,7 @@ async function fetchLogs() {
 
 function renderLogs(logs) {
   var el = document.getElementById('log-list');
+  if (!el) return;
   if (!logs || !logs.length) {
     el.innerHTML = '<div style="color:var(--text-dim);font-size:11px">No logs yet</div>';
     return;
@@ -968,6 +964,166 @@ function switchTab(name) {
 
   if (name === 'workspace') renderWorkspace();
   if (name === 'overview') fetchOverview();
+  if (name === 'recipes') fetchRecipes();
+  if (name === 'memory') fetchMemory();
+}
+
+// ── Recipes ──
+var recipesCache = null;
+var activeRecipeCategory = 'All';
+
+async function fetchRecipes() {
+  var el = document.getElementById('recipes-content');
+  if (!el) return;
+  try {
+    if (!recipesCache) recipesCache = await api('/api/recipes');
+    renderRecipes(recipesCache, activeRecipeCategory);
+  } catch (err) {
+    el.innerHTML = '<div class="empty"><p style="color:var(--text-dim)">Failed to load recipes: ' + esc(err.message) + '</p></div>';
+  }
+}
+
+function renderRecipes(recipes, activeCategory) {
+  var el = document.getElementById('recipes-content');
+  if (!el) return;
+
+  var categories = ['All', ...new Set(recipes.map(function(r) { return r.category; }))];
+  var filtered = activeCategory === 'All' ? recipes : recipes.filter(function(r) { return r.category === activeCategory; });
+
+  var filterHtml = '<div class="recipe-filters">' +
+    categories.map(function(cat) {
+      return '<button class="recipe-filter-btn' + (cat === activeCategory ? ' active' : '') + '" data-cat="' + esc(cat) + '">' + esc(cat) + '</button>';
+    }).join('') +
+  '</div>';
+
+  var cardsHtml = '<div class="recipe-grid">' +
+    filtered.map(function(r) {
+      return '<div class="recipe-card" data-goal="' + esc(r.default_goal_text) + '">' +
+        '<div class="recipe-card-header">' +
+          '<span class="recipe-category">' + esc(r.category) + '</span>' +
+        '</div>' +
+        '<h3 class="recipe-name">' + esc(r.name) + '</h3>' +
+        '<p class="recipe-desc">' + esc(r.description) + '</p>' +
+        '<div class="recipe-floors">' +
+          r.suggested_floors.map(function(f, i) {
+            return '<span class="recipe-floor">F' + (i + 1) + ' ' + esc(f) + '</span>';
+          }).join('') +
+        '</div>' +
+        '<div class="recipe-tags">' +
+          r.tags.map(function(t) { return '<span class="recipe-tag">' + esc(t) + '</span>'; }).join('') +
+        '</div>' +
+        '<button class="btn recipe-use-btn">Use this recipe</button>' +
+      '</div>';
+    }).join('') +
+  '</div>';
+
+  el.innerHTML =
+    '<div class="recipes-header">' +
+      '<h2>Recipes</h2>' +
+      '<p style="color:var(--text-dim);font-size:13px">Pick a recipe to pre-fill a build goal. All 5 agents will run the full pipeline.</p>' +
+    '</div>' +
+    filterHtml + cardsHtml;
+
+  // Category filter clicks
+  el.querySelectorAll('.recipe-filter-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      activeRecipeCategory = btn.dataset.cat;
+      renderRecipes(recipesCache, activeRecipeCategory);
+    });
+  });
+
+  // Recipe card use button
+  el.querySelectorAll('.recipe-use-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var card = btn.closest('.recipe-card');
+      var goalText = card ? card.dataset.goal : '';
+      if (!goalText) return;
+      var chatInput = document.getElementById('chat-input');
+      var chatWindow = document.getElementById('chat-window');
+      var chatBubble = document.getElementById('chat-bubble');
+      if (chatInput) chatInput.value = goalText;
+      if (chatWindow && !chatWindow.classList.contains('open')) {
+        chatWindow.classList.add('open');
+        if (chatBubble) chatBubble.style.display = 'none';
+      }
+      if (chatInput) chatInput.focus();
+      switchTab('overview');
+    });
+  });
+}
+
+// ── Memory ──
+var memorySearchTimer = null;
+
+async function fetchMemory(query) {
+  var el = document.getElementById('memory-content');
+  if (!el) return;
+
+  // Render search UI shell on first load
+  if (!el.querySelector('.memory-search')) {
+    el.innerHTML =
+      '<div class="memory-header">' +
+        '<h2>Memory</h2>' +
+        '<p style="color:var(--text-dim);font-size:13px">Floors that completed successfully are indexed here. Alba searches this before researching each new floor.</p>' +
+      '</div>' +
+      '<div class="memory-search-row">' +
+        '<input class="memory-search" type="text" placeholder="Search memory..." />' +
+        '<span class="memory-count" id="memory-count"></span>' +
+      '</div>' +
+      '<div id="memory-results"></div>';
+
+    var searchInput = el.querySelector('.memory-search');
+    searchInput.addEventListener('input', function() {
+      clearTimeout(memorySearchTimer);
+      var q = searchInput.value.trim();
+      memorySearchTimer = setTimeout(function() { renderMemoryResults(q); }, 300);
+    });
+  }
+
+  renderMemoryResults(query || '');
+}
+
+async function renderMemoryResults(query) {
+  var resultsEl = document.getElementById('memory-results');
+  var countEl = document.getElementById('memory-count');
+  if (!resultsEl) return;
+
+  try {
+    var data;
+    if (query) {
+      var results = await api('/api/memory/search?q=' + encodeURIComponent(query) + '&limit=20');
+      data = { memories: results, total: results.length };
+    } else {
+      data = await api('/api/memory?limit=30');
+    }
+
+    if (countEl) countEl.textContent = data.total + ' floors indexed';
+
+    if (!data.memories || data.memories.length === 0) {
+      resultsEl.innerHTML = '<div class="empty" style="padding:32px"><p style="color:var(--text-dim)">' +
+        (query ? 'No matches for "' + esc(query) + '"' : 'No floors indexed yet. Complete a build to populate memory.') +
+        '</p></div>';
+      return;
+    }
+
+    resultsEl.innerHTML = '<div class="memory-list">' +
+      data.memories.map(function(m) {
+        var ago = m.created_at ? timeAgo(m.created_at) : '';
+        return '<div class="memory-item">' +
+          '<div class="memory-item-header">' +
+            '<span class="memory-floor-name">' + esc(m.floor_name) + '</span>' +
+            '<span class="memory-time">' + esc(ago) + '</span>' +
+          '</div>' +
+          '<div class="memory-goal-text">' + esc(m.goal_text.substring(0, 80)) + (m.goal_text.length > 80 ? '…' : '') + '</div>' +
+          (m.summary ? '<div class="memory-summary">' + esc(m.summary) + '</div>' : '') +
+          (m.tags ? '<div class="memory-tags">' + m.tags.split(' ').filter(Boolean).map(function(t) { return '<span class="recipe-tag">' + esc(t) + '</span>'; }).join('') + '</div>' : '') +
+        '</div>';
+      }).join('') +
+    '</div>';
+  } catch (err) {
+    resultsEl.innerHTML = '<div class="empty"><p style="color:var(--text-dim)">Failed to load memory: ' + esc(err.message) + '</p></div>';
+  }
 }
 
 // ── Events ──

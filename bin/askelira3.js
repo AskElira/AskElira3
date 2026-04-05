@@ -8,6 +8,7 @@ require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 
 const { config, validate } = require('../src/config');
 const { listGoals, listFloors, getLogs } = require('../src/db');
+const { listRecipes, findByName } = require('../src/recipes/index');
 const { hermesChat, hermesRoute } = require('../src/hermes/index');
 const { runPlanner } = require('../src/pipeline/planner');
 const { runPipeline } = require('../src/pipeline/floor-runner');
@@ -38,6 +39,30 @@ async function main() {
     return;
   }
 
+  if (args.includes('--recipes')) {
+    showRecipes();
+    return;
+  }
+
+  if (args.includes('--recipe')) {
+    const name = args[args.indexOf('--recipe') + 1];
+    if (!name) { console.error('Usage: askelira3 --recipe <name>'); process.exit(1); }
+    await runFromRecipe(name);
+    return;
+  }
+
+  if (args.includes('--memory')) {
+    const subCmd = args[args.indexOf('--memory') + 1];
+    if (subCmd === 'search') {
+      const query = args.slice(args.indexOf('search') + 1).join(' ').replace(/^"|"$/g, '').trim();
+      if (!query) { console.error('Usage: askelira3 --memory search "<query>"'); process.exit(1); }
+      showMemorySearch(query);
+    } else {
+      showMemoryList();
+    }
+    return;
+  }
+
   if (args.includes('--help') || args.includes('-h')) {
     showHelp();
     return;
@@ -63,15 +88,81 @@ function showHelp() {
 AskElira 3 CLI — Hermes-powered building automation
 
 Usage:
-  askelira3 "build me a blog API"    Run a goal
-  askelira3 --status                 Show all goals
-  askelira3 --logs [goalId]          Show recent logs
-  askelira3 --fix <floorId>          Trigger Steven to fix a floor
-  askelira3                          Interactive chat with Hermes
-  askelira3 --help                   Show this help
+  askelira3 "build me a blog API"        Run a goal
+  askelira3 --status                     Show all goals
+  askelira3 --logs [goalId]              Show recent logs
+  askelira3 --fix <floorId>              Trigger Steven to fix a floor
+  askelira3 --recipes                    List available recipes
+  askelira3 --recipe <name>              Start a goal from a recipe
+  askelira3 --memory                     List indexed floor memories
+  askelira3 --memory search "<query>"    Search cross-goal memory
+  askelira3                              Interactive chat with Hermes
+  askelira3 --help                       Show this help
 
 Agents: Alba (research) -> Vex (validate) -> David (build) -> Elira (approve) -> Steven (fix)
 `);
+}
+
+function showRecipes() {
+  const recipes = listRecipes();
+  console.log(`\n  Recipes (${recipes.length})\n`);
+  const byCategory = {};
+  for (const r of recipes) {
+    if (!byCategory[r.category]) byCategory[r.category] = [];
+    byCategory[r.category].push(r);
+  }
+  for (const [cat, items] of Object.entries(byCategory)) {
+    console.log(`  ${cat}`);
+    for (const r of items) {
+      console.log(`    ${r.id.padEnd(24)} ${r.name}`);
+      console.log(`    ${''.padEnd(24)} ${r.description.substring(0, 70)}`);
+    }
+    console.log('');
+  }
+  console.log('  Start a recipe: askelira3 --recipe <id>\n');
+}
+
+async function runFromRecipe(name) {
+  const recipe = findByName(name);
+  if (!recipe) {
+    console.error(`Recipe not found: "${name}". Run --recipes to list available ones.`);
+    process.exit(1);
+  }
+  console.log(`\n[Recipe] ${recipe.name}`);
+  console.log(`[Recipe] ${recipe.description}\n`);
+  console.log(`[Recipe] Suggested floors:`);
+  recipe.suggested_floors.forEach((f, i) => console.log(`  F${i + 1}: ${f}`));
+  console.log(`\n[Recipe] Starting build...\n`);
+  await runGoal(recipe.default_goal_text);
+}
+
+function showMemoryList() {
+  require('dotenv').config({ path: require('path').resolve(__dirname, '..', '.env') });
+  const { listMemories, countMemories } = require('../src/memory-store');
+  const count = countMemories();
+  const memories = listMemories(20);
+  if (!count) { console.log('\n  No floors indexed yet.\n'); return; }
+  console.log(`\n  Memory (${count} floors indexed)\n`);
+  for (const m of memories) {
+    const time = new Date(m.created_at * 1000).toLocaleDateString();
+    console.log(`  [${time}] ${m.floor_name.padEnd(30)} ${m.goal_text.substring(0, 45)}`);
+  }
+  console.log('');
+}
+
+function showMemorySearch(query) {
+  require('dotenv').config({ path: require('path').resolve(__dirname, '..', '.env') });
+  const { searchMemory } = require('../src/memory-store');
+  const results = searchMemory(query, 10);
+  if (!results.length) { console.log(`\n  No matches for "${query}"\n`); return; }
+  console.log(`\n  Memory search: "${query}" (${results.length} results)\n`);
+  for (const m of results) {
+    const time = new Date(m.created_at * 1000).toLocaleDateString();
+    console.log(`  [${time}] ${m.floor_name}`);
+    console.log(`           Goal: ${m.goal_text.substring(0, 70)}`);
+    if (m.summary) console.log(`           ${m.summary.substring(0, 80)}`);
+    console.log('');
+  }
 }
 
 function showStatus() {

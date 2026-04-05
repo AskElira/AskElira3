@@ -6,6 +6,7 @@ const workspace = require('./workspace');
 const executor = require('../executor');
 const { updateFloor, addLog, listFloors, updateGoal, getGoal, getFloor, updateFloorPatches, recordMetric } = require('../db');
 const { notifyFloorLive, notifyFloorBlocked, notifyGoalComplete, sendTelegram } = require('../notify');
+const { storeFloorMemory } = require('../memory-store');
 
 const MAX_ITERATIONS = 5;
 
@@ -444,6 +445,7 @@ async function runFloor(floor, goal) {
       await notifyFloorLive(goal.text, floor.name);
       console.log(`[FloorRunner] Floor LIVE: ${floor.name}`);
       recordMetric({ goalId: goal.id, floorId: floor.id, agent: 'Hermes', event: 'floor_complete', durationMs: Date.now() - floorStart, success: 1, metadata: `iterations:${iteration}` });
+      storeFloorMemory({ goalId: goal.id, floorId: floor.id, goalText: goal.text, floorName: floor.name, floorDescription: floor.description, deliverable: floor.deliverable, summary: build.summary });
       return updateFloor(floor.id, {});
     }
 
@@ -493,6 +495,7 @@ async function runFloor(floor, goal) {
       await notifyFloorLive(goal.text, floor.name);
       console.log(`[FloorRunner] RESCUE LIVE: ${floor.name}`);
       recordMetric({ goalId: goal.id, floorId: floor.id, agent: 'Hermes', event: 'floor_complete', durationMs: Date.now() - floorStart, success: 1, metadata: 'rescue_success' });
+      storeFloorMemory({ goalId: goal.id, floorId: floor.id, goalText: goal.text, floorName: floor.name, floorDescription: floor.description, deliverable: floor.deliverable, summary: `Rescue build: ${rescueResult.filesWritten} files` });
       return updateFloor(floor.id, {});
     }
 

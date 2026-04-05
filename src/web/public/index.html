@@ -22,6 +22,8 @@
           <button class="header-tab active" data-tab="overview">Overview</button>
           <button class="header-tab" data-tab="building">Building</button>
           <button class="header-tab" data-tab="workspace">Workspace</button>
+          <button class="header-tab" data-tab="recipes">Recipes</button>
+          <button class="header-tab" data-tab="memory">Memory</button>
         </nav>
       </div>
       <div class="status-pills">
@@ -48,18 +50,6 @@
       <h2>Goals</h2>
       <div class="goal-list-items" id="goal-list"></div>
       <div class="new-goal-btn" id="new-goal-btn">+ New Goal</div>
-
-      <!-- User Model Panel -->
-      <div class="user-model-panel" id="user-model-panel">
-        <h2>User Model</h2>
-        <div id="user-model-content">
-          <div class="um-row"><span class="um-label">Name</span><span class="um-value" id="um-name">--</span></div>
-          <div class="um-row"><span class="um-label">Interests</span><div class="um-tags" id="um-interests"></div></div>
-          <div class="um-row"><span class="um-label">Tech Stack</span><div class="um-tags" id="um-tech"></div></div>
-          <div class="um-row"><span class="um-label">Goals</span><div class="um-tags" id="um-goals"></div></div>
-          <div class="um-row"><span class="um-label">Suggestions</span><div id="um-suggestions"></div></div>
-        </div>
-      </div>
     </aside>
 
     <!-- Main Content -->
@@ -79,13 +69,16 @@
         <div id="workspace-content"></div>
       </div>
 
-      <!-- Log Stream (inside main) -->
-      <div class="log-stream" id="log-stream">
-        <div class="log-stream-header">
-          <h3>Live Logs</h3>
-        </div>
-        <div id="log-list"></div>
+      <!-- Tab: Recipes -->
+      <div id="tab-recipes" class="tab-content" style="display:none">
+        <div id="recipes-content"></div>
       </div>
+
+      <!-- Tab: Memory -->
+      <div id="tab-memory" class="tab-content" style="display:none">
+        <div id="memory-content"></div>
+      </div>
+
     </main>
   </div>
 
