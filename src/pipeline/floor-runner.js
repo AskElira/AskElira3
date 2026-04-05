@@ -89,6 +89,125 @@ function withFloorWatch(promise, label, goalId) {
   });
 }
 
+/**
+ * Rescue agent: a blind, fresh builder that sees ALL prior failures
+ * and builds from scratch with a completely different approach.
+ * Skips Vex gates (they're part of the bias loop). Elira does one final review.
+ */
+async function rescueBuild(floor, goal, failureHistory) {
+  const { chat } = require('../llm');
+  const { parseJSON } = require('../hermes/index');
+  const { validateSchema, DAVID_BUILD_SCHEMA } = require('../schema-validator');
+  const { wrapInput } = require('../hermes/utils');
+
+  // Build a failure summary for the rescue agent
+  const failureSummary = failureHistory.map(f => {
+    if (f.agent === 'David') return `- Attempt ${f.iteration}: David build failed — ${f.reason}`;
+    if (f.agent === 'Vex2') return `- Attempt ${f.iteration}: Vex2 rejected (score ${f.score}) — ${(f.issues || []).join('; ')}`;
+    if (f.agent === 'Elira') return `- Attempt ${f.iteration}: Elira rejected — ${f.feedback}`;
+    return `- Attempt ${f.iteration}: ${f.agent} failed`;
+  }).join('\n');
+
+  // Get current workspace state
+  const existingFiles = workspace.listFiles(goal.id);
+  let workspaceContext = '';
+  if (existingFiles.length > 0) {
+    workspaceContext = `\n\nCurrent workspace files (from prior attempts):\n${workspace.getWorkspaceSummary(goal.id, { maxChars: 2000, linesPerFile: 15 })}`;
+  }
+
+  const rescuePrompt = `You are a rescue builder. 5 previous attempts to build this floor FAILED. You must succeed where they didn't.
+
+FLOOR: ${floor.name}
+DESCRIPTION: ${floor.description}
+SUCCESS CONDITION: ${floor.success_condition || 'Meets description'}
+DELIVERABLE: ${floor.deliverable || 'Complete implementation'}
+
+FAILURE HISTORY (learn from these — do NOT repeat the same mistakes):
+${failureSummary}
+${workspaceContext}
+
+INSTRUCTIONS:
+- Build from SCRATCH. Do not try to patch the previous attempts.
+- Take a SIMPLER approach. If previous attempts were over-engineered, simplify.
+- Every file must be COMPLETE and WORKING. No stubs, no TODOs.
+- Focus on the SUCCESS CONDITION above everything else.
+- If failures mention JSON parsing — your output format matters. Return ONLY JSON.
+
+Return ONLY a JSON object:
+{"summary":"what you built","files":{"filename.ext":"complete file content"}}`;
+
+  addLog(goal.id, floor.id, 'Hermes', `Rescue: building from scratch (${failureHistory.length} prior failures analyzed)`);
+
+  const reply = await chat(
+    [{ role: 'user', content: rescuePrompt }],
+    {
+      system: 'You are a rescue builder. You output ONLY valid JSON. Your response starts with { and ends with }. No other text.',
+      maxTokens: 8192,
+      isBuildingTask: true,
+      goalId: goal.id,
+      floorId: floor.id,
+      agent: 'Rescue',
+    }
+  );
+
+  // Parse — same flow as David but with rescue context
+  let parsed = parseJSON(reply, null);
+  if (!parsed || !parsed.files) {
+    // Try markdown extraction
+    const { davidBuild: _unused, ...rest } = require('../agents/david');
+    // Inline extraction since we can't import the private function
+    const files = {};
+    const blockRegex = /```[\w]*\n(?:\/\/\s*|#\s*)?(\S+\.[\w.]+)\n([\s\S]*?)```/g;
+    let match;
+    while ((match = blockRegex.exec(reply)) !== null) {
+      files[match[1]] = match[2].trim();
+    }
+    const boldRegex = /\*\*(\S+\.[\w.]+)\*\*\s*\n```[\w]*\n([\s\S]*?)```/g;
+    while ((match = boldRegex.exec(reply)) !== null) {
+      if (!files[match[1]]) files[match[1]] = match[2].trim();
+    }
+    if (Object.keys(files).length > 0) {
+      parsed = { summary: 'Rescue build from markdown', files };
+    }
+  }
+
+  // Validate
+  try {
+    validateSchema(parsed, DAVID_BUILD_SCHEMA);
+  } catch (err) {
+    return { approved: false, reason: `Rescue parse failed: ${err.message}`, filesWritten: 0 };
+  }
+
+  // Write files
+  workspace.ensureGoalDir(goal.id);
+  const writtenFiles = [];
+  for (const [filename, content] of Object.entries(parsed.files)) {
+    if (typeof content === 'string' && content.trim()) {
+      workspace.writeFile(goal.id, filename, content);
+      writtenFiles.push(filename);
+    }
+  }
+  addLog(goal.id, floor.id, 'Rescue', `Built ${writtenFiles.length} files: ${writtenFiles.join(', ')}`);
+
+  // Skip Vex — go straight to Elira for final review
+  addLog(goal.id, floor.id, 'Elira', `Rescue review: evaluating ${writtenFiles.length} files`);
+  const approval = await hermes.hermesApprove(floor, JSON.stringify(parsed, null, 2), { goalId: goal.id });
+  addLog(goal.id, floor.id, 'Elira', `Rescue verdict: ${approval.approved ? 'APPROVED' : 'REJECTED'} — ${approval.feedback}`);
+
+  recordMetric({
+    goalId: goal.id, floorId: floor.id, agent: 'Rescue', event: 'rescue_build',
+    durationMs: 0, success: approval.approved ? 1 : 0,
+    metadata: `files:${writtenFiles.length},approved:${approval.approved}`,
+  });
+
+  return {
+    approved: approval.approved,
+    output: JSON.stringify(parsed, null, 2),
+    filesWritten: writtenFiles.length,
+    reason: approval.approved ? null : approval.feedback,
+  };
+}
+
 async function syntaxCheckFiles(writtenFiles, goalId) {
   const errors = [];
   for (const filename of writtenFiles) {
@@ -153,6 +272,7 @@ async function runFloor(floor, goal) {
 
   let feedback = null;
   let vexBuildFeedback = null;
+  const failureHistory = []; // Collect ALL failure context for rescue agent
 
   const { config } = require('../config');
   if (config.hasTelegram && isHighRisk(floor)) {
@@ -227,14 +347,9 @@ async function runFloor(floor, goal) {
       recordMetric({ goalId: goal.id, floorId: floor.id, agent: 'David', event: 'build', durationMs: Date.now() - davidStart, success: 0, metadata: err.message });
       console.error(`[FloorRunner] David failed:`, err.message);
       addLog(goal.id, floor.id, 'David', `Build failed: ${err.message}`);
-      if (iteration === MAX_ITERATIONS) {
-        updateFloor(floor.id, { status: 'blocked' });
-        await notifyFloorBlocked(goal.text, floor.name, `David failed: ${err.message}`);
-        recordMetric({ goalId: goal.id, floorId: floor.id, agent: 'Hermes', event: 'floor_complete', durationMs: Date.now() - floorStart, success: 0, metadata: 'david_failed' });
-        return updateFloor(floor.id, {});
-      }
       feedback = `Build failed with error: ${err.message}. Try a different approach.`;
-      continue;
+      failureHistory.push({ iteration, agent: 'David', reason: err.message });
+      continue; // Falls through to rescue agent after MAX_ITERATIONS
     }
 
     // ── Step 3b: Auto-install dependencies Elira detects ──
@@ -288,17 +403,10 @@ async function runFloor(floor, goal) {
         vexBuildFeedback = `Vex2 score: ${vex2.score}/100. Issues: ${issues.join('; ')}`;
         addLog(goal.id, floor.id, 'Vex', `Gate 2 blocked: score ${vex2.score}, ${issues.length} issues`);
         console.log(`[FloorRunner] Vex2 blocked build: score=${vex2.score}`);
+        failureHistory.push({ iteration, agent: 'Vex2', score: vex2.score, issues });
         recordMetric({ goalId: goal.id, floorId: floor.id, agent: 'Vex', event: 'gate2', durationMs: Date.now() - vex2Start, success: 0, metadata: `score:${vex2.score},issues:${issues.length}` });
 
-        if (iteration === MAX_ITERATIONS) {
-          // No bypass — Vex2 failure on final iteration blocks the floor
-          addLog(goal.id, floor.id, 'Vex', `Gate 2 BLOCKED on final iteration (score: ${vex2.score}). Issues: ${issues.join('; ')}`);
-          updateFloor(floor.id, { status: 'blocked' });
-          await notifyFloorBlocked(goal.text, floor.name, `Vex Gate 2 blocked after ${MAX_ITERATIONS} iterations: ${issues.join('; ')}`);
-          recordMetric({ goalId: goal.id, floorId: floor.id, agent: 'Hermes', event: 'floor_complete', durationMs: Date.now() - floorStart, success: 0, metadata: 'vex2_blocked' });
-          console.log(`[FloorRunner] BLOCKED by Vex2: ${floor.name}`);
-          return updateFloor(floor.id, {});
-        } else {
+        if (iteration < MAX_ITERATIONS) {
           feedback = vexBuildFeedback;
           continue;
         }
@@ -325,14 +433,9 @@ async function runFloor(floor, goal) {
       recordMetric({ goalId: goal.id, floorId: floor.id, agent: 'Elira', event: 'approve', durationMs: Date.now() - eliraStart, success: 0, metadata: err.message });
       console.error(`[FloorRunner] Elira review failed:`, err.message);
       addLog(goal.id, floor.id, 'Elira', `Review failed: ${err.message}`);
-      if (iteration === MAX_ITERATIONS) {
-        updateFloor(floor.id, { status: 'blocked' });
-        await notifyFloorBlocked(goal.text, floor.name, `Review failed: ${err.message}`);
-        recordMetric({ goalId: goal.id, floorId: floor.id, agent: 'Hermes', event: 'floor_complete', durationMs: Date.now() - floorStart, success: 0, metadata: 'elira_failed' });
-        return updateFloor(floor.id, {});
-      }
       feedback = 'Previous review could not complete. Rebuild with more clarity.';
-      continue;
+      failureHistory.push({ iteration, agent: 'Elira', feedback: err.message });
+      continue; // Falls through to rescue agent after MAX_ITERATIONS
     }
 
     if (approval.approved) {
@@ -369,16 +472,42 @@ async function runFloor(floor, goal) {
       }
     }
 
+    failureHistory.push({ iteration, agent: 'Elira', feedback: approval.feedback, fixes: approval.fixes });
     addLog(goal.id, floor.id, 'Hermes', `Iteration ${iteration} rejected. Feedback: ${approval.feedback}`);
     console.log(`[FloorRunner] Rejected (${iteration}/${MAX_ITERATIONS}): ${floor.name}`);
   }
 
-  // Max iterations reached
+  // ── Rescue Agent: fresh perspective after 5 failures ──
+  // Instead of blocking, spawn a blind agent with ALL failure context.
+  // It builds from scratch with zero bias from prior attempts.
+  console.log(`[FloorRunner] Spawning rescue agent for: ${floor.name} (${failureHistory.length} failures)`);
+  addLog(goal.id, floor.id, 'Hermes', `5 iterations failed — spawning rescue agent with fresh perspective`);
+  updateFloor(floor.id, { status: 'building', current_step: 'rescue' });
+
+  try {
+    const rescueResult = await rescueBuild(floor, goal, failureHistory);
+
+    if (rescueResult.approved) {
+      updateFloor(floor.id, { status: 'live', result: rescueResult.output });
+      addLog(goal.id, floor.id, 'Hermes', `RESCUE SUCCESS: floor is LIVE (${rescueResult.filesWritten} files)`);
+      await notifyFloorLive(goal.text, floor.name);
+      console.log(`[FloorRunner] RESCUE LIVE: ${floor.name}`);
+      recordMetric({ goalId: goal.id, floorId: floor.id, agent: 'Hermes', event: 'floor_complete', durationMs: Date.now() - floorStart, success: 1, metadata: 'rescue_success' });
+      return updateFloor(floor.id, {});
+    }
+
+    // Rescue also failed — now block for real
+    addLog(goal.id, floor.id, 'Hermes', `Rescue agent also failed: ${rescueResult.reason}`);
+  } catch (rescueErr) {
+    console.error(`[FloorRunner] Rescue failed:`, rescueErr.message);
+    addLog(goal.id, floor.id, 'Hermes', `Rescue agent error: ${rescueErr.message}`);
+  }
+
   updateFloor(floor.id, { status: 'blocked' });
-  addLog(goal.id, floor.id, 'Hermes', `Floor blocked after ${MAX_ITERATIONS} iterations`);
-  await notifyFloorBlocked(goal.text, floor.name, `Max iterations (${MAX_ITERATIONS}) reached`);
-  recordMetric({ goalId: goal.id, floorId: floor.id, agent: 'Hermes', event: 'floor_complete', durationMs: Date.now() - floorStart, success: 0, metadata: 'max_iterations' });
-  console.log(`[FloorRunner] BLOCKED: ${floor.name}`);
+  addLog(goal.id, floor.id, 'Hermes', `Floor blocked after ${MAX_ITERATIONS} iterations + rescue attempt`);
+  await notifyFloorBlocked(goal.text, floor.name, `Blocked after ${MAX_ITERATIONS} iterations + rescue agent`);
+  recordMetric({ goalId: goal.id, floorId: floor.id, agent: 'Hermes', event: 'floor_complete', durationMs: Date.now() - floorStart, success: 0, metadata: 'rescue_failed' });
+  console.log(`[FloorRunner] BLOCKED (post-rescue): ${floor.name}`);
   return updateFloor(floor.id, {});
 }
 
