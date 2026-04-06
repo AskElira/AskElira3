@@ -166,35 +166,33 @@ async function fetchGoals() {
 
 function renderGoalList(goals) {
   var el = document.getElementById('goal-list');
+  var countEl = document.getElementById('goal-count');
+  if (countEl) countEl.textContent = goals.length || '';
+
   if (!goals.length) {
-    el.innerHTML = '<div class="empty" style="height:100px"><p>No goals yet</p></div>';
+    el.innerHTML = '<div style="padding:16px 16px;font-size:12px;color:var(--text-dim)">No goals yet — tell Elira what to build</div>';
     return;
   }
-  el.innerHTML = goals.map(function(g, index) {
-    var num = index + 1;
-    var floorInfo = g.floorCount > 0 ? g.floorsLive + '/' + g.floorCount : '';
-    var pct = g.floorCount > 0 ? Math.round(g.floorsLive / g.floorCount * 100) : 0;
-    var barColor = 'green';
-    if (g.floorsBlocked > 0) barColor = 'red';
-    else if (g.status === 'building' && pct < 100) barColor = 'amber';
+  el.innerHTML = goals.map(function(g) {
+    var floorInfo = g.floorCount > 0 ? g.floorsLive + '/' + g.floorCount + ' floors live' : 'Awaiting blueprint';
+    var statusLabel = g.status.replace('_', ' ');
+    // Capitalise first letter
+    statusLabel = statusLabel.charAt(0).toUpperCase() + statusLabel.slice(1);
 
-    var progressBar = g.floorCount > 0
-      ? '<div class="goal-progress-bar"><div class="goal-progress-fill ' + barColor + '" style="width:' + pct + '%"></div></div>'
-      : '';
-
-    return '<div class="goal-item ' + (g.id === selectedGoalId ? 'active' : '') + '" data-id="' + g.id + '">' +
-      '<span class="goal-number">#' + num + '</span>' +
-      '<span class="goal-text">' + esc(g.text) + '</span>' +
-      '<div class="goal-meta">' +
-        '<span class="badge ' + g.status + '">' + g.status.replace('_', ' ') + '</span>' +
-        (floorInfo ? '<span class="floor-progress">' + floorInfo + ' floors</span>' : '') +
+    return '<div class="goal-card ' + (g.id === selectedGoalId ? 'active' : '') + '" data-id="' + g.id + '">' +
+      '<div class="goal-card-top">' +
+        '<div class="goal-indicator ' + g.status + '"></div>' +
+        '<div class="goal-card-name">' + esc(g.text) + '</div>' +
       '</div>' +
-      progressBar +
+      '<div class="goal-card-meta">' +
+        '<div class="goal-card-status ' + g.status + '">' + statusLabel + '</div>' +
+        '<div class="goal-card-floors">' + floorInfo + '</div>' +
+      '</div>' +
     '</div>';
   }).join('');
 
-  el.querySelectorAll('.goal-item').forEach(function(item) {
-    item.addEventListener('click', function() { selectGoal(item.dataset.id); });
+  el.querySelectorAll('.goal-card').forEach(function(card) {
+    card.addEventListener('click', function() { selectGoal(card.dataset.id); });
   });
 }
 
@@ -1022,7 +1020,7 @@ async function createGoal() {
 
 // ── Tabs ──
 function switchTab(name) {
-  document.querySelectorAll('.header-tab').forEach(function(t) {
+  document.querySelectorAll('.tab').forEach(function(t) {
     t.classList.toggle('active', t.dataset.tab === name);
   });
   document.querySelectorAll('.tab-content').forEach(function(tc) {
@@ -1214,7 +1212,7 @@ function bindEvents() {
   if (chatMinimize) {
     chatMinimize.addEventListener('click', function() {
       chatWindow.classList.remove('open');
-      chatBubble.style.display = 'flex';
+      if (chatBubble) chatBubble.style.display = 'flex';
     });
   }
 
@@ -1228,21 +1226,8 @@ function bindEvents() {
     this.style.height = 'auto';
     this.style.height = Math.min(this.scrollHeight, 80) + 'px';
   });
-  document.querySelectorAll('.header-tab').forEach(function(t) {
+  document.querySelectorAll('.tab').forEach(function(t) {
     t.addEventListener('click', function() { switchTab(t.dataset.tab); });
-  });
-  document.getElementById('new-goal-btn').addEventListener('click', function() {
-    closeMobileSidebar();
-    // Open chat widget and focus input
-    var cw = document.getElementById('chat-window');
-    var cb = document.getElementById('chat-bubble');
-    if (cw && !cw.classList.contains('open')) {
-      cw.classList.add('open');
-      if (cb) cb.style.display = 'none';
-    }
-    var ci = document.getElementById('chat-input');
-    ci.placeholder = 'Tell me what to build...';
-    ci.focus();
   });
 
   // Hamburger menu

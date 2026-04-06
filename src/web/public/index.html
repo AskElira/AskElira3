@@ -6,54 +6,55 @@
   <title>AskElira 3</title>
   <link rel="stylesheet" href="/style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body>
   <div class="app">
-    <!-- Header with nav tabs -->
-    <header class="header">
-      <div class="header-left">
-        <button class="hamburger" id="hamburger-btn" aria-label="Toggle sidebar">
-          <span></span><span></span><span></span>
-        </button>
-        <h1>AskElira <span class="h-elira">3</span></h1>
-        <span class="hermes-indicator elira-mode" id="hermes-mode">Hermes</span>
-        <nav class="header-tabs">
-          <button class="header-tab active" data-tab="overview">Overview</button>
-          <button class="header-tab" data-tab="building">Building</button>
-          <button class="header-tab" data-tab="workspace">Workspace</button>
-          <button class="header-tab" data-tab="recipes">Recipes</button>
-          <button class="header-tab" data-tab="memory">Memory</button>
-        </nav>
-      </div>
-      <div class="status-pills">
-        <div class="pill">
-          <span class="dot" id="llm-dot"></span>
-          <span id="llm-label">LLM</span>
-        </div>
-        <div class="pill">
-          <span class="dot" id="tg-dot"></span>
-          <span>Telegram</span>
-        </div>
-        <div class="pill">
-          <span class="dot" id="search-dot"></span>
-          <span id="search-label">Search</span>
-        </div>
-      </div>
-    </header>
-
-    <!-- Sidebar overlay for mobile -->
-    <div class="sidebar-overlay" id="sidebar-overlay"></div>
-
     <!-- Sidebar -->
     <aside class="sidebar" id="sidebar">
-      <h2>Goals</h2>
-      <div class="goal-list-items" id="goal-list"></div>
-      <div class="new-goal-btn" id="new-goal-btn">+ New Goal</div>
+      <div class="sidebar-header">
+        <div class="sidebar-logo">Ask<span>Elira</span></div>
+        <div class="sidebar-ver">v3</div>
+      </div>
+      <div class="sidebar-section">
+        Your Goals
+        <span class="sidebar-count" id="goal-count"></span>
+      </div>
+      <div class="goal-list" id="goal-list"></div>
+      <div class="sidebar-footer">
+        <div class="sidebar-avatar" id="sidebar-avatar">O</div>
+        <div class="sidebar-user" id="sidebar-user">openclawd</div>
+      </div>
     </aside>
 
-    <!-- Main Content -->
-    <main class="main">
+    <!-- Main -->
+    <div class="main">
+      <!-- Header with nav tabs -->
+      <header class="header">
+        <nav class="tabs">
+          <div class="tab active" data-tab="overview">Overview</div>
+          <div class="tab" data-tab="building">Building</div>
+          <div class="tab" data-tab="workspace">Workspace</div>
+          <div class="tab" data-tab="recipes">Recipes</div>
+          <div class="tab" data-tab="memory">Memory</div>
+        </nav>
+        <div class="header-spacer"></div>
+        <div class="status-pills">
+          <div class="status-pill">
+            <div class="status-dot" id="llm-dot"></div>
+            <span id="llm-label">LLM</span>
+          </div>
+          <div class="status-pill">
+            <div class="status-dot" id="tg-dot"></div>
+            <span>Telegram</span>
+          </div>
+          <div class="status-pill">
+            <div class="status-dot" id="search-dot"></div>
+            <span id="search-label">Search</span>
+          </div>
+        </div>
+      </header>
+
       <!-- Tab: Overview -->
       <div id="tab-overview" class="tab-content">
         <div id="overview-content"></div>
@@ -78,8 +79,7 @@
       <div id="tab-memory" class="tab-content" style="display:none">
         <div id="memory-content"></div>
       </div>
-
-    </main>
+    </div>
   </div>
 
   <!-- Floating AI Chat Widget -->
@@ -103,8 +103,8 @@
         </button>
       </div>
     </div>
-    <button class="chat-bubble" id="chat-bubble" aria-label="Chat with Elira">
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    <button class="chat-btn" id="chat-bubble" aria-label="Chat with Elira">
+      <span class="chat-btn-label">E</span>
       <span class="chat-bubble-badge" id="chat-badge" style="display:none"></span>
     </button>
   </div>
