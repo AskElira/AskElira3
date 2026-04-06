@@ -303,7 +303,8 @@ async function handleTelegramMessage(userText) {
     // Check if package.json will change (need npm install after)
     const pkgBefore = await run('git show HEAD:package.json 2>/dev/null | md5 -q', 5000);
 
-    const pull = await run('git pull origin main 2>&1', 60000);
+    // Pull from Hermes upstream, not the AskElira3 repo
+    const pull = await run('git pull https://github.com/NousResearch/hermes-agent main 2>&1', 60000);
     if (!pull.ok) {
       await tgReply(`Update failed:\n${pull.output}`);
       return;
