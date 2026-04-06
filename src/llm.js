@@ -113,10 +113,11 @@ async function withRetry(fn, retries = 3, baseDelay = 1000) {
 function stripThinking(text) {
   let out = text
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/TOOL_CALL[\s\S]*?\[\/TOOLCALL\]/gi, '')
-    .replace(/\[TOOL_CALL\][\s\S]*?\[\/TOOL_CALL\]/gi, '')
+    .replace(/\[?TOOL_CALL\]?[\s\S]*?\[?\/TOOL_?CALL\]?/gi, '')
     .replace(/<minimax:tool_?call>[\s\S]*?<\/minimax:tool_?call>/gi, '')
     .replace(/```tool[\s\S]*?```/gi, '')
+    .replace(/\{tool\s*=>[\s\S]*?\/TOOL_CALL/gi, '')
+    .replace(/TOOL_CALL\s*\n?\{[\s\S]*?\}\s*\n?\/TOOL_CALL/gi, '')
     // Strip other model-specific wrapper tags (e.g. <response>, <output>, <result>)
     .replace(/<\/?(?:response|output|result|reply|assistant)>/gi, '')
     .trim();
@@ -205,10 +206,10 @@ async function chat(messages, { model, system, maxTokens = 4096, isBuildingTask:
     // Append a hint to the last user message to prevent tool-call-only responses
     const retryMessages = messages.map((m, i) =>
       i === messages.length - 1 && m.role === 'user'
-        ? { ...m, content: m.content + '\n\n[Respond with plain text only. Do not use tool calls or function calls.]' }
+        ? { ...m, content: m.content + '\n\n[You do NOT have tools. You cannot search, browse, or call functions. Answer directly from your knowledge. Respond with plain text only.]' }
         : m
     );
-    const retrySystem = system ? system + '\n\nIMPORTANT: Respond with plain text only. Do NOT output tool_call, invoke, or function_call tags.' : system;
+    const retrySystem = system ? system + '\n\nCRITICAL: You have NO tools available. Do NOT output TOOL_CALL, tool_call, invoke, search, or function tags. You must answer directly from your training knowledge. If you don\'t know, say so.' : system;
     const retryFn = () => {
       if (config.isAnthropic && !config.isOpenAI) {
         return anthropicChat(retryMessages, { model: resolvedModel, system: retrySystem, maxTokens, goalId, floorId, agent });

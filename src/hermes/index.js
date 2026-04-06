@@ -319,7 +319,7 @@ async function hermesChat(messages, systemOverride = null) {
   const systemPrompt = (systemOverride
     ? SOUL + '\n\n' + designCtx + '\n\n' + systemOverride
     : SOUL + '\n\n' + designCtx) + goalContext
-    + '\n\nIMPORTANT: Respond with plain text only. Never output tool_call, invoke, or function_call tags.';
+    + '\n\nCRITICAL: You have NO tools. Do NOT output TOOL_CALL, tool_call, invoke, search, or function tags. You cannot browse the web or call APIs. Answer directly from your knowledge. If asked to look something up, answer from what you know and suggest the user search manually if needed.';
 
   const reply = await chat(messages, {
     model: config.eliraModel,
