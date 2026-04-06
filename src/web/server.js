@@ -277,11 +277,38 @@ async function handleTelegramMessage(userText) {
   userModelMod.touch();
   agi.learnFromMessage(userText).catch(() => {});
 
-  // ALL slash commands go to Hermes as natural language — strip the /
+  // Strip leading / — all slash commands are for Hermes
   if (userText.startsWith('/')) {
     userText = userText.replace(/^\/+/, '').trim();
   }
   const lower = userText.toLowerCase().trim();
+
+  // ════════════════════════════════════════════════════════════════
+  // STEP 0: Hermes system commands (/update, /restart)
+  // ════════════════════════════════════════════════════════════════
+
+  if (/^update$/i.test(lower)) {
+    await tgReply('Updating Hermes...');
+    const { execSync } = require('child_process');
+    const cwd = path.resolve(__dirname, '..', '..');
+    try {
+      const pullResult = execSync('git pull origin main 2>&1', { cwd, timeout: 30000 }).toString().trim();
+      const installResult = execSync('npm install --production 2>&1', { cwd, timeout: 60000 }).toString().trim();
+      const shortPull = pullResult.split('\n').slice(-3).join('\n');
+      await tgReply(`*Hermes Updated*\n\n\`\`\`\n${shortPull}\n\`\`\`\n\nRestarting...`);
+      // Exit — launchd will restart us with the new code
+      setTimeout(() => process.exit(0), 1000);
+    } catch (err) {
+      await tgReply(`Update failed: ${err.message.substring(0, 200)}`);
+    }
+    return;
+  }
+
+  if (/^restart$/i.test(lower)) {
+    await tgReply('Restarting Hermes...');
+    setTimeout(() => process.exit(0), 500);
+    return;
+  }
 
   // ════════════════════════════════════════════════════════════════
   // STEP 1: Check pending confirmation states FIRST (time-sensitive)
