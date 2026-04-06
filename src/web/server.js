@@ -289,18 +289,37 @@ async function handleTelegramMessage(userText) {
 
   if (/^update$/i.test(lower)) {
     await tgReply('Updating Hermes...');
-    const { execSync } = require('child_process');
+    const { exec } = require('child_process');
     const cwd = path.resolve(__dirname, '..', '..');
-    try {
-      const pullResult = execSync('git pull origin main 2>&1', { cwd, timeout: 30000 }).toString().trim();
-      const installResult = execSync('npm install --production 2>&1', { cwd, timeout: 60000 }).toString().trim();
-      const shortPull = pullResult.split('\n').slice(-3).join('\n');
-      await tgReply(`*Hermes Updated*\n\n\`\`\`\n${shortPull}\n\`\`\`\n\nRestarting...`);
-      // Exit — launchd will restart us with the new code
-      setTimeout(() => process.exit(0), 1000);
-    } catch (err) {
-      await tgReply(`Update failed: ${err.message.substring(0, 200)}`);
+    const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', HOME: process.env.HOME || '/Users/openclawd' };
+
+    const run = (cmd, timeout = 60000) => new Promise((resolve) => {
+      exec(cmd, { cwd, timeout, env }, (err, stdout, stderr) => {
+        if (err) resolve({ ok: false, output: (stderr || err.message).substring(0, 300) });
+        else resolve({ ok: true, output: (stdout || '').trim() });
+      });
+    });
+
+    // Check if package.json will change (need npm install after)
+    const pkgBefore = await run('git show HEAD:package.json 2>/dev/null | md5 -q', 5000);
+
+    const pull = await run('git pull origin main 2>&1', 60000);
+    if (!pull.ok) {
+      await tgReply(`Update failed:\n${pull.output}`);
+      return;
     }
+
+    // Only npm install if package.json changed (avoids breaking native modules)
+    const pkgAfter = await run('md5 -q package.json', 5000);
+    let depsMsg = 'No dependency changes';
+    if (pkgBefore.output !== pkgAfter.output) {
+      const install = await run('npm install 2>&1', 90000);
+      depsMsg = install.ok ? 'Dependencies updated' : 'npm warning: ' + install.output.substring(0, 100);
+    }
+
+    const shortPull = pull.output.split('\n').slice(-4).join('\n');
+    await tgReply(`*Hermes Updated*\n\n${shortPull}\n\n${depsMsg}\n\nRestarting...`);
+    setTimeout(() => process.exit(0), 1000);
     return;
   }
 
