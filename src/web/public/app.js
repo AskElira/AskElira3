@@ -198,14 +198,79 @@ function renderGoalList(goals) {
   });
 }
 
+// ── SSE live stream ──
+var eventSource = null;
+
+function connectSSE(goalId) {
+  if (eventSource) { eventSource.close(); eventSource = null; }
+  eventSource = new EventSource('/api/goals/' + goalId + '/stream');
+
+  eventSource.addEventListener('log', function(e) {
+    try {
+      var log = JSON.parse(e.data);
+      var container = document.getElementById('sse-log-stream');
+      if (!container) return;
+      var entry = document.createElement('div');
+      entry.className = 'log-entry sse-new';
+      entry.innerHTML = '<span class="log-time">' + timeAgo(log.createdAt) + '</span>' +
+        '<span class="log-agent ' + log.agent + '">' + log.agent + '</span>' +
+        '<span class="log-msg">' + esc(log.message) + '</span>';
+      container.appendChild(entry);
+      container.scrollTop = container.scrollHeight;
+      // Keep max 50 entries
+      while (container.children.length > 50) container.removeChild(container.firstChild);
+    } catch (_) {}
+  });
+
+  eventSource.addEventListener('status', function(e) {
+    try {
+      var status = JSON.parse(e.data);
+      if (status.type === 'floor') {
+        // Update floor card badge in-place
+        var cards = document.querySelectorAll('.floor-card');
+        cards.forEach(function(card) {
+          var nameEl = card.querySelector('.floor-name');
+          if (nameEl && nameEl.textContent.trim().startsWith(status.floorName)) {
+            var badge = card.querySelector('.badge');
+            if (badge) { badge.className = 'badge ' + status.status; badge.textContent = status.status; }
+            card.className = 'floor-card ' + status.status;
+          }
+        });
+        fetchGoals(); // refresh sidebar counts
+      }
+      if (status.type === 'goal') {
+        fetchGoals();
+        fetchGoalDetail(selectedGoalId);
+      }
+    } catch (_) {}
+  });
+
+  eventSource.addEventListener('done', function() {
+    if (eventSource) { eventSource.close(); eventSource = null; }
+    fetchGoalDetail(selectedGoalId);
+    fetchGoals();
+    showToast('Build complete!', 'success');
+  });
+
+  eventSource.onerror = function() {
+    // SSE connection lost — will auto-reconnect or we close it
+    if (eventSource) { eventSource.close(); eventSource = null; }
+  };
+}
+
+function disconnectSSE() {
+  if (eventSource) { eventSource.close(); eventSource = null; }
+}
+
 // ── Goal detail ──
 function selectGoal(id) {
   selectedGoalId = id;
   fetchGoalDetail(id);
   fetchGoals();
   switchTab('building');
-  // Close mobile sidebar
   closeMobileSidebar();
+  // Connect SSE for live updates
+  connectSSE(id);
 }
 
 var cachedMetrics = null;
@@ -344,7 +409,11 @@ function renderGoalDetail(goal) {
         '<span>' + timeAgo(goal.created_at) + '</span>' +
       '</div>' +
     '</div>' +
-    '<div class="floor-list">' + floorsHtml + '</div>';
+    '<div class="floor-list">' + floorsHtml + '</div>' +
+    '<div class="sse-stream-section">' +
+      '<h3 class="sse-stream-title"><span class="sse-dot"></span> Live Feed</h3>' +
+      '<div class="sse-log-container" id="sse-log-stream"></div>' +
+    '</div>';
 
   // Bind floor card click to expand
   el.querySelectorAll('.floor-card').forEach(function(card) {

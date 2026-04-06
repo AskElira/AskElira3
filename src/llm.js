@@ -177,7 +177,27 @@ async function chat(messages, { model, system, maxTokens = 4096, isBuildingTask:
     return openaiChat(messages, { model: resolvedModel, system, maxTokens, goalId, floorId, agent });
   };
 
-  const reply = await callProvider();
+  let reply;
+  try {
+    reply = await callProvider();
+  } catch (primaryErr) {
+    // Failover to Anthropic if primary fails with server error or timeout
+    if (config.hasFallbackLlm && /500|503|timeout/i.test(primaryErr.message)) {
+      console.warn(`[LLM] Primary failed (${primaryErr.message}), trying Anthropic fallback...`);
+      try {
+        reply = await anthropicChat(messages, {
+          model: config.fallbackModel,
+          system, maxTokens, goalId, floorId, agent,
+          _useFallback: true,
+        });
+      } catch (fallbackErr) {
+        console.error(`[LLM] Fallback also failed: ${fallbackErr.message}`);
+        throw primaryErr; // throw original error
+      }
+    } else {
+      throw primaryErr;
+    }
+  }
 
   // Retry once if reply is empty/whitespace (MiniMax sometimes returns only tool_call tags with no text)
   if (!reply || !reply.trim()) {
@@ -206,9 +226,11 @@ async function chat(messages, { model, system, maxTokens = 4096, isBuildingTask:
   return reply;
 }
 
-async function anthropicChat(messages, { model, system, maxTokens, goalId, floorId, agent }) {
+async function anthropicChat(messages, { model, system, maxTokens, goalId, floorId, agent, _useFallback }) {
   const start = Date.now();
-  const baseUrl = config.llmBaseUrl.replace(/\/v1\/?$/, '');
+  const apiKey = _useFallback ? config.fallbackLlmKey : config.llmApiKey;
+  const rawBaseUrl = _useFallback ? config.fallbackLlmUrl : config.llmBaseUrl;
+  const baseUrl = rawBaseUrl.replace(/\/v1\/?$/, '');
   const url = `${baseUrl}/v1/messages`;
 
   // Anthropic expects messages without system role; system is a top-level param
@@ -225,7 +247,7 @@ async function anthropicChat(messages, { model, system, maxTokens, goalId, floor
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': config.llmApiKey,
+      'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify(body),

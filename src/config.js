@@ -18,6 +18,9 @@ const config = {
   dbPath: path.resolve(__dirname, '..', 'data', 'askelira3.db'),
   apiToken: process.env.API_TOKEN || '',
   lightpandaUrl: process.env.LIGHTPANDA_URL || '',
+  fallbackLlmKey: process.env.FALLBACK_LLM_KEY || process.env.ANTHROPIC_API_KEY || '',
+  fallbackLlmUrl: (process.env.FALLBACK_LLM_URL || 'https://api.anthropic.com/v1').replace(/\/$/, ''),
+  fallbackModel: process.env.FALLBACK_MODEL || 'claude-haiku-4-5-20251001',
 };
 
 config.isAnthropic = !config.llmBaseUrl || config.llmBaseUrl.includes('anthropic');
@@ -29,6 +32,7 @@ config.hasLlm = !!config.llmApiKey;
 config.hasAgentmail = !!config.agentmailKey;
 config.hasApiToken = !!config.apiToken;
 config.hasLightpanda = !!config.lightpandaUrl;
+config.hasFallbackLlm = !!config.fallbackLlmKey;
 
 function validate() {
   const issues = [];
