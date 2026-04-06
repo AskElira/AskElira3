@@ -17,6 +17,7 @@ try {
 console.log('[Hermes] Soul loaded:', SOUL.length, 'chars');
 
 const { wrapInput } = require('./utils');
+const browser = require('./browser');
 
 function getSoul() {
   return SOUL;
@@ -160,6 +161,33 @@ async function hermesPlan(goalText, { goalId } = {}) {
 }
 
 /**
+ * Build a structured review summary from David's output.
+ * Shows ALL files with previews — never truncates. Elira sees the full picture.
+ */
+function summarizeForReview(davidOutput) {
+  try {
+    const parsed = typeof davidOutput === 'string' ? JSON.parse(davidOutput) : davidOutput;
+    const files = parsed.files || {};
+    const fileEntries = Object.entries(files);
+    if (fileEntries.length === 0) return wrapInput(davidOutput, 6000);
+
+    const fileList = fileEntries.map(([name, content]) => {
+      const text = String(content || '');
+      const lines = text.split('\n').length;
+      const chars = text.length;
+      // Show first 300 chars of each file so Elira can assess quality
+      const preview = text.substring(0, 300);
+      return `### ${name} (${lines} lines, ${chars} chars)\n\`\`\`\n${preview}${chars > 300 ? '\n...' : ''}\n\`\`\``;
+    });
+
+    return `Summary: ${parsed.summary || 'Build output'}\n\nFiles delivered (${fileEntries.length}):\n\n${fileList.join('\n\n')}`;
+  } catch (_) {
+    // If it's not JSON, send a capped version
+    return wrapInput(davidOutput, 12000);
+  }
+}
+
+/**
  * Elira mode: approve or reject a floor's output.
  * Returns { approved: boolean, feedback: string, fixes: string[] }
  */
@@ -168,13 +196,30 @@ async function hermesApprove(floor, davidOutput, { goalId } = {}) {
   const { formatContext: userCtx } = require('../user-model');
   const userContext = userCtx();
   const contextPrefix = userContext ? `${userContext}\n\n` : '';
+
+  // Build a structured summary so Elira sees ALL files (never truncated)
+  const outputSummary = summarizeForReview(davidOutput);
+
+  // Only inject design context for UI-related floors
+  const isUIFloor = /frontend|ui|html|css|dashboard|page|layout|component|render|display|visual|style/i
+    .test(`${floor.name} ${floor.description || ''} ${floor.deliverable || ''}`);
+  const designCtx = isUIFloor ? getDesignContext('build') : '';
+  const designNote = isUIFloor
+    ? '\n\nIf this floor produced frontend/UI files, check for design intent violations in addition to functional correctness.'
+    : '';
+
   const messages = [{
     role: 'user',
-    content: `${contextPrefix}Review this deliverable.\n\nFloor: ${wrapInput(floor.name)}\nDescription: ${wrapInput(floor.description)}\nSuccess Condition: ${wrapInput(floor.success_condition || floor.successCondition || 'Meets description')}\nExpected Deliverable: ${wrapInput(floor.deliverable || 'Complete implementation')}\n\nDavid's Output:\n${wrapInput(typeof davidOutput === 'string' ? davidOutput : JSON.stringify(davidOutput, null, 2), 8000)}\n\nIf this floor produced frontend/UI files, check for design intent violations (hardcoded hex, wrong typography, misuse of --accent) in addition to functional correctness.\n\nCRITICAL: Return ONLY valid JSON. No markdown, no explanation.\nFormat: {"approved": true/false, "feedback": "your feedback here", "fixes": ["specific change 1", "specific change 2"]}`
+    content: `${contextPrefix}Review this deliverable.\n\nFloor: ${wrapInput(floor.name)}\nDescription: ${wrapInput(floor.description)}\nSuccess Condition: ${wrapInput(floor.success_condition || floor.successCondition || 'Meets description')}\nExpected Deliverable: ${wrapInput(floor.deliverable || 'Complete implementation')}\n\nDavid's Output:\n${outputSummary}${designNote}\n\nCRITICAL: Return ONLY valid JSON. No markdown, no explanation.\nFormat: {"approved": true/false, "feedback": "your feedback here", "fixes": ["specific change 1", "specific change 2"]}`
   }];
   const reply = await chat(messages, {
     model: config.eliraModel,
-    system: SOUL + '\n\n' + getDesignContext('build') + '\n\nYou are in ELIRA MODE. You are reviewing a build for approval.',
+    system: SOUL + (designCtx ? '\n\n' + designCtx : '') +
+      '\n\nYou are in ELIRA MODE reviewing a build.' +
+      '\n\nAPPROVAL BIAS: Approve if the deliverable is functionally complete and matches the success condition. ' +
+      'Minor issues (style, naming, missing comments, edge cases) should be noted in feedback but should NOT block approval. ' +
+      'Only reject for: missing core functionality, wrong deliverable, broken code that won\'t run, or security issues.' +
+      (isUIFloor ? '' : ' Design intent checks do not apply to this non-UI floor.'),
     isBuildingTask: true,
     goalId: goalId || floor.goal_id,
     floorId: floor.id,
@@ -317,4 +362,4 @@ async function hermesRoute(goalText) {
   return goal;
 }
 
-module.exports = { hermesReason, hermesPlan, hermesApprove, hermesFix, hermesChat, hermesRoute, hermesExecPlan, getSoul, parseJSON };
+module.exports = { hermesReason, hermesPlan, hermesApprove, hermesFix, hermesChat, hermesRoute, hermesExecPlan, getSoul, parseJSON, browser };

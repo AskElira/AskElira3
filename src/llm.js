@@ -5,6 +5,12 @@ const { createBreaker, CircuitOpenError } = require('./circuit-breaker');
 
 const ollamaBreaker = createBreaker('ollama', { cooldownMs: 120000 });
 
+// Detect Ollama availability at startup — skip fallback entirely if not running
+let ollamaAvailable = false;
+fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(2000) })
+  .then(() => { ollamaAvailable = true; console.log('[LLM] Ollama detected — local fallback enabled'); })
+  .catch(() => { console.log('[LLM] Ollama not available — local fallback disabled'); });
+
 // ── Usage tracking ──────────────────────────────────────────────────────────
 const USAGE_FILE = path.resolve(__dirname, '..', 'data', 'usage.json');
 const USAGE_BUDGET = parseInt(process.env.TOKEN_BUDGET || '5000000', 10); // default 5M tokens
@@ -151,8 +157,8 @@ async function chat(messages, { model, system, maxTokens = 4096, isBuildingTask:
     throw new Error('LLM_API_KEY not configured');
   }
 
-  // Route to local Ollama when over 90% budget, unless it's a building task
-  if (!building && isOverThreshold()) {
+  // Route to local Ollama when over 90% budget, unless it's a building task or Ollama isn't available
+  if (!building && ollamaAvailable && isOverThreshold()) {
     try {
       console.log('[LLM] Over 90% budget — routing chat to local Ollama');
       return await ollamaBreaker.call(() => ollamaChat(messages, { system, maxTokens }));
