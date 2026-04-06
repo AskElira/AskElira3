@@ -277,6 +277,11 @@ async function handleTelegramMessage(userText) {
   userModelMod.touch();
   agi.learnFromMessage(userText).catch(() => {});
 
+  // Strip leading / from Telegram commands — treat as natural language for Hermes
+  // Only keep / for recognized bot commands (/claude_code, /claude)
+  if (userText.startsWith('/') && !/^\/?\s*(?:claude[_ ]?code|claude)\b/i.test(userText)) {
+    userText = userText.replace(/^\/+/, '').trim();
+  }
   const lower = userText.toLowerCase().trim();
 
   // ════════════════════════════════════════════════════════════════
@@ -361,7 +366,7 @@ async function handleTelegramMessage(userText) {
   // STEP 2: Fast-path for unambiguous single-word/phrase commands
   // ════════════════════════════════════════════════════════════════
 
-  if (/^(status|goals|what.s running|show goals)$/i.test(lower)) {
+  if (/^(status|goals|update|what.s running|show goals)$/i.test(lower)) {
     const goals = listGoals();
     if (!goals.length) return tgReply('No goals yet. Send me something to build!');
     const lines = goals.slice(0, 5).map(g => {
