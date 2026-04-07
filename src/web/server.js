@@ -451,6 +451,71 @@ async function handleTelegramMessage(userText) {
   // STEP 2: Fast-path for unambiguous single-word/phrase commands
   // ════════════════════════════════════════════════════════════════
 
+  // Launch / stop a build
+  const launchMatch = lower.match(/^(?:launch|run|start)\s+(?:goal\s+)?(?:#)?(\d+|.+)$/i)
+    || (lower === 'launch' || lower === 'run' ? ['launch', null] : null);
+  const stopMatch = lower.match(/^stop\s+(?:goal\s+)?(?:#)?(\d+|.+)$/i)
+    || (lower === 'stop' ? ['stop', null] : null);
+
+  if (launchMatch) {
+    const launcher = require('../launcher');
+    const targetRef = launchMatch[1];
+    const goals = listGoals();
+    let target = null;
+    if (!targetRef) {
+      target = goals.find(g => g.status === 'goal_met') || goals[0];
+    } else if (/^\d+$/.test(targetRef)) {
+      target = goals[parseInt(targetRef) - 1];
+    } else {
+      target = goals.find(g => g.text.toLowerCase().includes(targetRef.toLowerCase()));
+    }
+    if (!target) return tgReply(`Goal "${targetRef}" not found.`);
+    await tgReply(`🚀 Launching "${target.text.substring(0, 50)}"...`);
+    setImmediate(async () => {
+      try {
+        const result = await launcher.launch(target.id);
+        if (result.ok) {
+          await tgReply(`✅ *Running*\n${target.text.substring(0, 50)}\n\n${result.url}\nPID: ${result.pid}\nKind: ${result.kind}\n\nReply "stop ${target.text.substring(0, 20)}" to stop.`);
+        } else {
+          await tgReply(`❌ Launch failed: ${result.error}`);
+        }
+      } catch (err) { tgReply(`Launch error: ${err.message}`); }
+    });
+    return;
+  }
+
+  if (stopMatch) {
+    const launcher = require('../launcher');
+    const targetRef = stopMatch[1];
+    const running = launcher.listRunning();
+    if (running.length === 0) return tgReply('No builds are running.');
+    let target = null;
+    if (!targetRef) {
+      target = running[0]; // most recent
+    } else {
+      const goals = listGoals();
+      const matching = goals.find(g => g.text.toLowerCase().includes(targetRef.toLowerCase()));
+      if (matching) target = running.find(r => r.goalId === matching.id);
+    }
+    if (!target) return tgReply(`No running build matches "${targetRef}".`);
+    const result = await launcher.stop(target.goalId);
+    return tgReply(result.ok ? `⏹ Stopped (was on port ${target.port})` : `Stop failed: ${result.error}`);
+  }
+
+  // List currently running launches
+  if (/^running$|^launches$|^what.s running$/i.test(lower)) {
+    const launcher = require('../launcher');
+    const list = launcher.listRunning();
+    if (!list.length) return tgReply('No builds are currently running.');
+    const goals = listGoals();
+    const lines = list.map(r => {
+      const g = goals.find(g => g.id === r.goalId);
+      const name = g ? g.text.substring(0, 40) : r.goalId.substring(0, 8);
+      return `🚀 ${name}\n   ${r.url} · ${r.status} · ${r.kind}`;
+    });
+    return tgReply(`*Running builds*\n\n${lines.join('\n\n')}`);
+  }
+
   if (/^(status|goals|what.s running|show goals)$/i.test(lower)) {
     const goals = listGoals();
     if (!goals.length) return tgReply('No goals yet. Send me something to build!');

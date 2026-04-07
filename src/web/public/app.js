@@ -394,11 +394,20 @@ function renderGoalDetail(goal) {
   var liveCount = goal.floors.filter(function(f) { return f.status === 'live'; }).length;
   var progressPct = goal.floors.length > 0 ? Math.round(liveCount / goal.floors.length * 100) : 0;
 
+  // Launch button visible when goal has live floors (i.e. something to run)
+  var canLaunch = liveCount > 0;
+  var launchBtnHtml = canLaunch
+    ? '<button class="btn-launch" id="launch-goal-btn" data-id="' + goal.id + '" title="Run this build on a local port">🚀 Launch</button>'
+    : '';
+
   el.innerHTML =
     '<div class="goal-header">' +
       '<div class="goal-header-top">' +
         '<h2>' + esc(goal.text) + '</h2>' +
-        '<button class="btn-delete" id="delete-goal-btn" data-id="' + goal.id + '" title="Delete this goal">Delete</button>' +
+        '<div class="goal-header-actions">' +
+          launchBtnHtml +
+          '<button class="btn-delete" id="delete-goal-btn" data-id="' + goal.id + '" title="Delete this goal">Delete</button>' +
+        '</div>' +
       '</div>' +
       '<div class="meta">' +
         '<span class="badge ' + goal.status + '">' + goal.status.replace('_', ' ') + '</span>' +
@@ -406,6 +415,7 @@ function renderGoalDetail(goal) {
         '<span>' + progressPct + '% complete</span>' +
         '<span>' + timeAgo(goal.created_at) + '</span>' +
       '</div>' +
+      '<div id="launch-panel-' + goal.id + '" class="launch-panel" style="display:none"></div>' +
     '</div>' +
     '<div class="floor-list">' + floorsHtml + '</div>' +
     '<div class="sse-stream-section">' +
@@ -428,6 +438,18 @@ function renderGoalDetail(goal) {
       triggerFix(btn.dataset.floorId);
     });
   });
+
+  // Bind launch button
+  var launchBtn = document.getElementById('launch-goal-btn');
+  if (launchBtn) {
+    launchBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      triggerLaunch(launchBtn.dataset.id);
+    });
+  }
+
+  // If this goal is already running, restore the panel
+  checkLaunchStatus(goal.id);
 
   // Bind delete button
   var deleteBtn = document.getElementById('delete-goal-btn');
@@ -501,6 +523,140 @@ async function triggerFix(floorId) {
     await api('/api/floors/' + floorId + '/fix', { method: 'POST', body: {} });
   } catch (err) {
     showToast('Fix failed: ' + err.message, 'error');
+  }
+}
+
+// ── Launch build ──
+
+var launchEventSources = {};
+
+function renderLaunchPanel(goalId, status) {
+  var panel = document.getElementById('launch-panel-' + goalId);
+  if (!panel) return;
+
+  var statusColor = {
+    idle: 'gray',
+    installing: 'amber',
+    running: 'green',
+    stopped: 'gray',
+    crashed: 'red',
+    error: 'red',
+  }[status.status] || 'gray';
+
+  var urlHtml = status.url && (status.status === 'running' || status.status === 'installing')
+    ? '<a href="' + status.url + '" target="_blank" class="launch-url">' + status.url + '</a>'
+    : '<span class="launch-url-inactive">' + (status.url || '—') + '</span>';
+
+  var actionHtml = status.status === 'running'
+    ? '<button class="btn-launch-stop" data-id="' + goalId + '">⏹ Stop</button>'
+    : status.status === 'idle' || status.status === 'stopped' || status.status === 'crashed' || status.status === 'error'
+    ? '<button class="btn-launch-restart" data-id="' + goalId + '">▶ Launch again</button>'
+    : '';
+
+  var logsHtml = (status.logs || []).map(function(l) {
+    return '<div class="launch-log-line">' + esc(l) + '</div>';
+  }).join('');
+
+  panel.innerHTML =
+    '<div class="launch-header">' +
+      '<div class="launch-status"><span class="launch-dot ' + statusColor + '"></span>' + esc(status.status) + (status.kind ? ' · ' + esc(status.kind) : '') + '</div>' +
+      urlHtml +
+      actionHtml +
+    '</div>' +
+    '<div class="launch-cmd">$ ' + esc(status.cmd || 'detecting...') + '</div>' +
+    '<div class="launch-logs" id="launch-logs-' + goalId + '">' + logsHtml + '</div>';
+
+  panel.style.display = 'block';
+
+  // Bind action buttons
+  var stopBtn = panel.querySelector('.btn-launch-stop');
+  if (stopBtn) stopBtn.addEventListener('click', function(e) { e.stopPropagation(); stopLaunch(goalId); });
+  var restartBtn = panel.querySelector('.btn-launch-restart');
+  if (restartBtn) restartBtn.addEventListener('click', function(e) { e.stopPropagation(); triggerLaunch(goalId); });
+
+  // Auto-scroll log area
+  var logArea = document.getElementById('launch-logs-' + goalId);
+  if (logArea) logArea.scrollTop = logArea.scrollHeight;
+}
+
+async function triggerLaunch(goalId) {
+  var panel = document.getElementById('launch-panel-' + goalId);
+  if (panel) {
+    panel.style.display = 'block';
+    panel.innerHTML = '<div class="launch-header"><div class="launch-status"><span class="launch-dot amber"></span>installing dependencies...</div></div>';
+  }
+  showToast('Launching build...', 'info');
+  try {
+    var result = await api('/api/goals/' + goalId + '/launch', { method: 'POST', body: {} });
+    if (!result.ok) {
+      showToast('Launch failed: ' + (result.error || 'unknown'), 'error');
+      renderLaunchPanel(goalId, { status: 'error', url: result.url, logs: [result.error || ''] });
+      return;
+    }
+    showToast('Running at ' + result.url, 'success');
+    // Immediately fetch status + start streaming
+    await checkLaunchStatus(goalId);
+    connectLaunchStream(goalId);
+  } catch (err) {
+    showToast('Launch error: ' + err.message, 'error');
+  }
+}
+
+async function stopLaunch(goalId) {
+  try {
+    await api('/api/goals/' + goalId + '/stop', { method: 'POST', body: {} });
+    disconnectLaunchStream(goalId);
+    await checkLaunchStatus(goalId);
+    showToast('Build stopped', 'info');
+  } catch (err) {
+    showToast('Stop failed: ' + err.message, 'error');
+  }
+}
+
+async function checkLaunchStatus(goalId) {
+  try {
+    var status = await api('/api/goals/' + goalId + '/launch-status');
+    if (status.status && status.status !== 'idle') {
+      renderLaunchPanel(goalId, status);
+      if (status.status === 'running' && !launchEventSources[goalId]) {
+        connectLaunchStream(goalId);
+      }
+    }
+  } catch (_) {}
+}
+
+function connectLaunchStream(goalId) {
+  disconnectLaunchStream(goalId);
+  var es = new EventSource('/api/goals/' + goalId + '/launch-stream');
+  launchEventSources[goalId] = es;
+
+  es.addEventListener('log', function(e) {
+    try {
+      var data = JSON.parse(e.data);
+      var logArea = document.getElementById('launch-logs-' + goalId);
+      if (!logArea) return;
+      var div = document.createElement('div');
+      div.className = 'launch-log-line';
+      div.textContent = data.line;
+      logArea.appendChild(div);
+      // Keep max 200 lines in DOM
+      while (logArea.children.length > 200) logArea.removeChild(logArea.firstChild);
+      logArea.scrollTop = logArea.scrollHeight;
+    } catch (_) {}
+  });
+
+  es.addEventListener('done', function() {
+    disconnectLaunchStream(goalId);
+    checkLaunchStatus(goalId);
+  });
+
+  es.onerror = function() { disconnectLaunchStream(goalId); };
+}
+
+function disconnectLaunchStream(goalId) {
+  if (launchEventSources[goalId]) {
+    launchEventSources[goalId].close();
+    delete launchEventSources[goalId];
   }
 }
 

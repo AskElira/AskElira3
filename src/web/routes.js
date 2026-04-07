@@ -195,6 +195,70 @@ router.post('/api/goals/:id/fix', async (req, res) => {
   }
 });
 
+// ── Launcher ──
+
+router.post('/api/goals/:id/launch', async (req, res) => {
+  try {
+    const goal = getGoal(req.params.id);
+    if (!goal) return res.status(404).json({ error: 'Goal not found' });
+    const launcher = require('../launcher');
+    const result = await launcher.launch(req.params.id);
+    if (!result.ok) return res.status(400).json(result);
+    addLog(goal.id, null, 'Hermes', `Launched on ${result.url} (pid ${result.pid}, kind ${result.kind})`);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/api/goals/:id/stop', async (req, res) => {
+  try {
+    const launcher = require('../launcher');
+    const result = await launcher.stop(req.params.id);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/goals/:id/launch-status', (req, res) => {
+  try {
+    const launcher = require('../launcher');
+    res.json(launcher.getStatus(req.params.id));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/goals/:id/launch-stream', (req, res) => {
+  const launcher = require('../launcher');
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const send = (line) => {
+    if (line === '__CLOSED__') {
+      res.write(`event: done\ndata: {}\n\n`);
+      res.end();
+      return;
+    }
+    res.write(`event: log\ndata: ${JSON.stringify({ line })}\n\n`);
+  };
+
+  const unsubscribe = launcher.subscribeLogs(req.params.id, send);
+  req.on('close', unsubscribe);
+});
+
+router.get('/api/launches', (req, res) => {
+  try {
+    const launcher = require('../launcher');
+    res.json(launcher.listRunning());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Workspace Files ──
 
 // List workspace files for a goal
