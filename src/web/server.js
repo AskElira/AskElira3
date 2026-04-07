@@ -537,11 +537,12 @@ async function handleTelegramMessage(userText) {
       const words = g.text.toLowerCase().split(/\s+/).filter(w => w.length > 3);
       return words.some(w => task.toLowerCase().includes(w));
     }) || goals[0];
-    const cwd = targetGoal ? workspace.getWorkspacePath(targetGoal.id) : process.cwd();
+    const cwd = targetGoal ? workspace.getWorkspacePath(targetGoal.id) : path.resolve(__dirname, '..', '..');
+    const contextualTask = `You are working in the AskElira3 project at ${path.resolve(__dirname, '..', '..')}. The workspace for this task is at ${cwd}.\n\nTask: ${task}`;
     await tgReply(`Claude Code: "${task.substring(0, 60)}"...`);
     setImmediate(async () => {
       try {
-        const result = await claudeCode(task, { cwd });
+        const result = await claudeCode(contextualTask, { cwd });
         if (result.success) {
           const output = result.output.length > 3500 ? result.output.substring(0, 3500) + '\n...(truncated)' : result.output;
           await tgReply(`*Claude Code* (${Math.round(result.durationMs / 1000)}s)\n\n${output}`);
@@ -814,12 +815,13 @@ async function handleTelegramMessage(userText) {
     });
     if (!targetGoal) targetGoal = goals[0];
 
-    const cwd = targetGoal ? workspace.getWorkspacePath(targetGoal.id) : process.cwd();
+    const cwd = targetGoal ? workspace.getWorkspacePath(targetGoal.id) : path.resolve(__dirname, '..', '..');
+    const contextualTask = `You are working in the AskElira3 project at ${path.resolve(__dirname, '..', '..')}. The workspace for this task is at ${cwd}.\n\nTask: ${task}`;
     await tgReply(`Sending to Claude Code: "${task.substring(0, 60)}"...`);
 
     setImmediate(async () => {
       try {
-        const result = await claudeCode(task, { cwd });
+        const result = await claudeCode(contextualTask, { cwd });
         if (result.success) {
           const output = result.output.length > 3500
             ? result.output.substring(0, 3500) + '\n\n... (truncated)'

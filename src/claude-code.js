@@ -14,7 +14,7 @@ const { execFile } = require('child_process');
 const path = require('path');
 
 const CLAUDE_PATH = process.env.CLAUDE_PATH || 'claude';
-const CLAUDE_TIMEOUT_MS = parseInt(process.env.CLAUDE_TIMEOUT_MS || '300000', 10); // 5 min default
+const CLAUDE_TIMEOUT_MS = parseInt(process.env.CLAUDE_TIMEOUT_MS || '600000', 10); // 10 min default
 
 /**
  * Run a prompt through Claude Code CLI.

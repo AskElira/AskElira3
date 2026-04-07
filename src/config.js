@@ -10,6 +10,8 @@ const config = {
   agentModel: process.env.AGENT_MODEL || 'claude-sonnet-4-6',
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
   telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
+  nvidiaApiKey: process.env.NVIDIA_API_KEY || '',
+  openaiApiKey: process.env.OPENAI_API_KEY || '',
   tavilyApiKey: process.env.TAVILY_API_KEY || '',
   braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY || '',
   agentmailKey: process.env.AGENTMAIL_API_KEY || '',
@@ -33,6 +35,8 @@ config.hasAgentmail = !!config.agentmailKey;
 config.hasApiToken = !!config.apiToken;
 config.hasLightpanda = !!config.lightpandaUrl;
 config.hasFallbackLlm = !!config.fallbackLlmKey;
+config.hasNvidia = !!config.nvidiaApiKey;
+config.hasWhisper = !!config.openaiApiKey;
 
 function validate() {
   const issues = [];
