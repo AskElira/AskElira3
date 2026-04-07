@@ -20,7 +20,7 @@ const REPORT_PATH = require('path').resolve(__dirname, '..', '..', 'data', 'over
 const INTERVAL_MS = 15 * 60 * 1000; // 15 minutes between cycles
 const MAX_CYCLES = 48; // 48 x 15min = 12 hours
 const BUILD_POLL_MS = 30_000;
-const BUILD_TIMEOUT_MS = 20 * 60_000; // 20 min max per build
+const BUILD_TIMEOUT_MS = 60 * 60_000; // 60 min max per build (matches floor-runner hard ceiling)
 
 const fs = require('fs');
 

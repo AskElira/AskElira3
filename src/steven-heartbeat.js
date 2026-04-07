@@ -136,7 +136,13 @@ async function heartbeatCycle() {
               addLog(goal.id, floor.id, 'Steven', `Heartbeat: fix error — ${err.message}`);
               state[stateKey].lastFixAttempt = now;
               state[stateKey].lastFixResult = 'error';
-              state[stateKey].fixAttempts = attempts + 1;
+              // Don't count transient upstream errors against the attempt budget
+              const isTransient = /429|500|502|503|504|529|overloaded|rate.?limit|timeout|ECONNRESET|ETIMEDOUT/i.test(err.message);
+              if (!isTransient) {
+                state[stateKey].fixAttempts = attempts + 1;
+              } else {
+                console.log(`[Heartbeat] Transient error — not counting against attempt budget`);
+              }
             }
           }
         }

@@ -101,7 +101,7 @@ async function withRetry(fn, retries = 3, baseDelay = 1000) {
     try {
       return await fn();
     } catch (err) {
-      const retryable = /429|500|503/.test(err.message);
+      const retryable = /429|500|502|503|504|529|overloaded|rate.?limit|timeout/i.test(err.message);
       if (!retryable || attempt === retries) throw err;
       const delay = baseDelay * Math.pow(2, attempt - 1);
       console.warn(`[LLM] Retry ${attempt}/${retries} in ${delay}ms — ${err.message}`);
@@ -183,7 +183,7 @@ async function chat(messages, { model, system, maxTokens = 4096, isBuildingTask:
     reply = await callProvider();
   } catch (primaryErr) {
     // Failover to Anthropic if primary fails with server error or timeout
-    if (config.hasFallbackLlm && /500|503|timeout/i.test(primaryErr.message)) {
+    if (config.hasFallbackLlm && /500|502|503|504|529|timeout|overloaded|rate.?limit/i.test(primaryErr.message)) {
       console.warn(`[LLM] Primary failed (${primaryErr.message}), trying Anthropic fallback...`);
       try {
         reply = await anthropicChat(messages, {
