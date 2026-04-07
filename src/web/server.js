@@ -451,31 +451,48 @@ async function handleTelegramMessage(userText) {
   // STEP 2: Fast-path for unambiguous single-word/phrase commands
   // ════════════════════════════════════════════════════════════════
 
-  // Launch / stop a build
-  const launchMatch = lower.match(/^(?:launch|run|start)\s+(?:goal\s+)?(?:#)?(\d+|.+)$/i)
-    || (lower === 'launch' || lower === 'run' ? ['launch', null] : null);
-  const stopMatch = lower.match(/^stop\s+(?:goal\s+)?(?:#)?(\d+|.+)$/i)
-    || (lower === 'stop' ? ['stop', null] : null);
+  // Launch / stop a build — only matches SHORT, simple references
+  // Anything complex (API keys, sentences, file paths) falls through to Hermes auto-routing
+  const SECRET_PATTERN = /(sk-[a-zA-Z0-9_-]{20,}|sk-ant-[a-zA-Z0-9_-]{20,}|am_us_[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{20,}|api[_-]?key|password)/i;
+  const isSimpleLaunchRef = (text) => {
+    if (!text) return true;
+    if (SECRET_PATTERN.test(text)) return false;
+    if (text.length > 50) return false;
+    if (text.includes(',') || text.includes('.') || text.split(/\s+/).length > 8) return false;
+    return true;
+  };
 
-  if (launchMatch) {
+  const rawLaunchMatch = lower.match(/^(?:launch|run|start)(?:\s+(?:it|this|that|for me))?\s*(.*)$/i);
+  const launchTarget = rawLaunchMatch ? rawLaunchMatch[1].trim() : null;
+  const isLaunchCommand = rawLaunchMatch && isSimpleLaunchRef(launchTarget);
+
+  const stopMatch = lower.match(/^stop(?:\s+(?:it|this|that))?\s*(.*)$/i);
+  const stopTarget = stopMatch ? stopMatch[1].trim() : null;
+  const isStopCommand = stopMatch && isSimpleLaunchRef(stopTarget);
+
+  if (isLaunchCommand) {
     const launcher = require('../launcher');
-    const targetRef = launchMatch[1];
     const goals = listGoals();
     let target = null;
-    if (!targetRef) {
-      target = goals.find(g => g.status === 'goal_met') || goals[0];
-    } else if (/^\d+$/.test(targetRef)) {
-      target = goals[parseInt(targetRef) - 1];
+    if (!launchTarget) {
+      // "run" / "launch" / "run it" — pick the most recently discussed goal from chat
+      // Fall back to most recent goal_met
+      const recentText = recentMessages.slice(-6).map(m => m.content).join(' ').toLowerCase();
+      target = goals.find(g => recentText.includes(g.text.substring(0, 30).toLowerCase()))
+            || goals.find(g => g.status === 'goal_met')
+            || goals[0];
+    } else if (/^\d+$/.test(launchTarget)) {
+      target = goals[parseInt(launchTarget) - 1];
     } else {
-      target = goals.find(g => g.text.toLowerCase().includes(targetRef.toLowerCase()));
+      target = goals.find(g => g.text.toLowerCase().includes(launchTarget.toLowerCase()));
     }
-    if (!target) return tgReply(`Goal "${targetRef}" not found.`);
+    if (!target) return tgReply(`Goal "${launchTarget}" not found.`);
     await tgReply(`🚀 Launching "${target.text.substring(0, 50)}"...`);
     setImmediate(async () => {
       try {
         const result = await launcher.launch(target.id);
         if (result.ok) {
-          await tgReply(`✅ *Running*\n${target.text.substring(0, 50)}\n\n${result.url}\nPID: ${result.pid}\nKind: ${result.kind}\n\nReply "stop ${target.text.substring(0, 20)}" to stop.`);
+          await tgReply(`✅ *Running*\n${target.text.substring(0, 50)}\n\n${result.url}\nPID: ${result.pid}\nKind: ${result.kind}\n\nReply "stop" to stop.`);
         } else {
           await tgReply(`❌ Launch failed: ${result.error}`);
         }
@@ -484,20 +501,19 @@ async function handleTelegramMessage(userText) {
     return;
   }
 
-  if (stopMatch) {
+  if (isStopCommand) {
     const launcher = require('../launcher');
-    const targetRef = stopMatch[1];
     const running = launcher.listRunning();
     if (running.length === 0) return tgReply('No builds are running.');
     let target = null;
-    if (!targetRef) {
+    if (!stopTarget) {
       target = running[0]; // most recent
     } else {
       const goals = listGoals();
-      const matching = goals.find(g => g.text.toLowerCase().includes(targetRef.toLowerCase()));
+      const matching = goals.find(g => g.text.toLowerCase().includes(stopTarget.toLowerCase()));
       if (matching) target = running.find(r => r.goalId === matching.id);
     }
-    if (!target) return tgReply(`No running build matches "${targetRef}".`);
+    if (!target) return tgReply(`No running build matches "${stopTarget}".`);
     const result = await launcher.stop(target.goalId);
     return tgReply(result.ok ? `⏹ Stopped (was on port ${target.port})` : `Stop failed: ${result.error}`);
   }
@@ -602,12 +618,16 @@ async function handleTelegramMessage(userText) {
     ? userText.replace(/^hermes\s+/i, '').trim()
     : null;
 
-  // Natural-language action detection: command verbs, URLs, or file references
-  const ACTION_VERBS = /^\s*(browse|install|run|download|fetch|pip3?\s+install|npm\s+install|cd\s+|git\s+|curl\s+|wget\s+|fix|debug|read|modify|edit|update|check|inspect|patch|repair|diagnose|investigate|look\s+at|show\s+me|open)\b/i;
+  // Natural-language action detection: command verbs, URLs, file references, or secrets
+  const ACTION_VERBS = /^\s*(browse|install|run|download|fetch|pip3?\s+install|npm\s+install|cd\s+|git\s+|curl\s+|wget\s+|fix|debug|read|modify|edit|update|check|inspect|patch|repair|diagnose|investigate|look\s+at|show\s+me|open|setup|set up|configure|deploy)\b/i;
   const URL_WITH_VERB = /(https?:\/\/\S+)/.test(userText) && /\b(install|setup|add|get|download|browse|fetch|look|check|read|use)\b/i.test(userText);
   const FILE_REFERENCE = /\b[\w-]+\.(py|js|ts|mjs|cjs|jsx|tsx|html|css|json|yaml|yml|md|sh|toml|conf|ini|env)\b/i.test(userText);
+  // Detect API keys / secrets — these always need Hermes (to install them properly, never just chat them away)
+  const HAS_SECRET = SECRET_PATTERN.test(userText);
+  // Pronoun references ("run it", "fix this", "do that") — need conversation context
+  const HAS_PRONOUN_REF = /\b(it|this|that)\b/i.test(userText) && /\b(run|launch|start|fix|debug|do|setup|set up|install|use)\b/i.test(userText);
 
-  const isAction = hermesSlashMatch !== null || ACTION_VERBS.test(userText) || URL_WITH_VERB || FILE_REFERENCE;
+  const isAction = hermesSlashMatch !== null || ACTION_VERBS.test(userText) || URL_WITH_VERB || FILE_REFERENCE || HAS_SECRET || HAS_PRONOUN_REF;
 
   if (isAction) {
     const task = hermesSlashMatch || userText;
@@ -625,11 +645,20 @@ async function handleTelegramMessage(userText) {
         break;
       }
     }
+    // For pronoun refs ("it"/"this"), use conversation context to find the goal
+    if (!targetGoal && HAS_PRONOUN_REF) {
+      const recentText = recentMessages.slice(-8).map(m => m.content).join(' ').toLowerCase();
+      targetGoal = goals.find(g => recentText.includes(g.text.substring(0, 30).toLowerCase()));
+    }
     if (!targetGoal) targetGoal = goals.find(g => g.status === 'goal_met') || goals[0];
 
     const cwd = targetGoal ? workspace.getWorkspacePath(targetGoal.id) : path.resolve(__dirname, '..', '..');
     const goalContext = targetGoal ? `\n\nRelevant goal: "${targetGoal.text}" (${targetGoal.status})\nWorkspace: ${cwd}` : '';
-    const contextualTask = `You are Hermes with filesystem + shell access via Claude Code. You are working inside the AskElira3 project at ${path.resolve(__dirname, '..', '..')}.${goalContext}\n\nThe user said: ${task}\n\nExecute this task. Read files, make edits, run commands as needed. If it involves fixing a build, read the relevant files first, make the fix, and report what you changed. If the user wants something launched, use the existing launcher API.`;
+    const secretNote = HAS_SECRET
+      ? '\n\nIMPORTANT: The user provided an API key/secret in their message. Extract it, write it to the appropriate .env file in the workspace (create if needed), and never echo the key back in your response. Use placeholders like "sk-...****" when describing what you did.'
+      : '';
+
+    const contextualTask = `You are Hermes with filesystem + shell access via Claude Code. You are working inside the AskElira3 project at ${path.resolve(__dirname, '..', '..')}.${goalContext}\n\nThe user said: ${task}\n\nExecute this task end-to-end. You can:\n- Read files in the workspace\n- Edit/create files\n- Run pip install, npm install, python3, node, etc.\n- Start processes (use & or nohup for long-running ones)\n- Check if things actually work after fixing them\n\nIf the user wants something fixed: read the files, make the fix, verify it works.\nIf the user wants something run: install deps, start it, report the result.\nIf the user references "it" or "this", they mean the workspace above.${secretNote}`;
 
     await tgReply(`Hermes: working on "${task.substring(0, 60)}"${targetGoal ? `\n(in ${targetGoal.text.substring(0, 40)})` : ''}`);
     setImmediate(async () => {
