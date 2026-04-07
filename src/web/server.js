@@ -527,7 +527,34 @@ async function handleTelegramMessage(userText) {
     }
   }
 
-  // ── Fast-path: Claude Code ──
+  // ── Auto-route action requests to Claude Code ──
+  // If the user asks Hermes to DO something (browse, install, run, download, fetch, pip, npm),
+  // route to Claude Code which can actually execute. Hermes alone can only generate text.
+  const actionMatch = userText.match(/^(browse|install|run|download|fetch|pip3?\s+install|npm\s+install|cd\s+|git\s+clone|curl\s+|wget\s+)\s*(.*)/i)
+    || (/(https?:\/\/\S+)/.test(userText) && /\b(install|setup|add|get|download|browse|fetch|look at|check out)\b/i.test(userText) && userText.match(/(.*)/));
+  if (actionMatch) {
+    const task = userText; // pass the full message as the task
+    const { claudeCode } = require('../claude-code');
+    const goals = listGoals();
+    const targetGoal = goals[0];
+    const cwd = targetGoal ? workspace.getWorkspacePath(targetGoal.id) : path.resolve(__dirname, '..', '..');
+    const contextualTask = `You are working in the AskElira3 project at ${path.resolve(__dirname, '..', '..')}. The workspace for this task is at ${cwd}.\n\nThe user asked: ${task}\n\nExecute this task. If it involves a URL, fetch/read it. If it involves installing, run the install command. Report what you did.`;
+    await tgReply(`Routing to Claude Code (action detected)...`);
+    setImmediate(async () => {
+      try {
+        const result = await claudeCode(contextualTask, { cwd });
+        if (result.success) {
+          const output = result.output.length > 3500 ? result.output.substring(0, 3500) + '\n...(truncated)' : result.output;
+          await tgReply(`*Claude Code* (${Math.round(result.durationMs / 1000)}s)\n\n${output}`);
+        } else {
+          await tgReply(`Claude Code failed: ${result.error.substring(0, 500)}`);
+        }
+      } catch (err) { await tgReply(`Claude Code error: ${err.message}`); }
+    });
+    return;
+  }
+
+  // ── Fast-path: Claude Code (explicit) ──
   const claudeMatch = userText.match(/^\/?\s*(?:claude[_ ]?code|claude|ask claude|use claude)\s*(.*)/i);
   if (claudeMatch) {
     const task = claudeMatch[1].trim() || 'What can you help with?';
