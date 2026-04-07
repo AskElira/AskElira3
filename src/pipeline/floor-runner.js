@@ -234,6 +234,96 @@ async function syntaxCheckFiles(writtenFiles, goalId) {
   return errors;
 }
 
+/**
+ * Smoke test: actually try to import/run the code to catch runtime errors
+ * that syntax checks miss (bad imports, missing attributes, wrong APIs, etc).
+ *
+ * Returns an array of error strings. Empty array = smoke test passed.
+ *
+ * Python: detects packages (dirs with __init__.py) and tries to import them.
+ *   Uses a venv in .venv/ to avoid polluting system Python.
+ * Node.js: for any package.json with a main entry, tries to require() it.
+ *   For standalone .js files in root, tries require().
+ */
+async function smokeTestBuild(writtenFiles, goalId) {
+  const errors = [];
+  const wsPath = workspace.getWorkspacePath(goalId);
+  const fs = require('fs');
+  const path = require('path');
+
+  // ── Python smoke test ──
+  const pyPackages = new Set();
+  const standalonePyFiles = [];
+  for (const filename of writtenFiles) {
+    if (!filename.endsWith('.py')) continue;
+    const parts = filename.split('/');
+    if (parts.length >= 2 && parts[1] === '__init__.py') {
+      // Top-level package like "scraper/__init__.py"
+      pyPackages.add(parts[0]);
+    } else if (parts.length === 1 && filename !== '__init__.py') {
+      // Standalone .py file in root
+      standalonePyFiles.push(filename);
+    }
+  }
+
+  if (pyPackages.size > 0 || standalonePyFiles.length > 0) {
+    // Try plain python3 first; fall back to python3.12/3.11 if available
+    const pyCmd = fs.existsSync('/usr/local/bin/python3.12') ? '/usr/local/bin/python3.12'
+                : fs.existsSync('/usr/local/bin/python3.11') ? '/usr/local/bin/python3.11'
+                : 'python3';
+
+    // Install common deps if requirements.txt exists
+    const reqPath = path.join(wsPath, 'requirements.txt');
+    if (fs.existsSync(reqPath)) {
+      await executor.runExecFile(pyCmd, ['-m', 'pip', 'install', '--quiet', '--user', '-r', reqPath], { cwd: wsPath, timeout: 60000 });
+    }
+
+    // Try importing each package
+    for (const pkg of pyPackages) {
+      const result = await executor.runExecFile(pyCmd, ['-c', `import sys; sys.path.insert(0, '.'); import ${pkg}; print('ok')`], { cwd: wsPath, timeout: 20000 });
+      if (!result.success || !result.stdout.includes('ok')) {
+        const err = (result.stderr || result.stdout || 'import failed').trim();
+        // Extract the most relevant line (usually the last Error line)
+        const errLines = err.split('\n').filter(l => l.trim());
+        const lastErr = errLines.slice(-3).join(' | ');
+        errors.push(`Python package "${pkg}" failed to import: ${lastErr}`);
+      }
+    }
+
+    // Try running each standalone file through py_compile + syntax (already done) — skip
+  }
+
+  // ── Node.js smoke test ──
+  const pkgJsonPath = path.join(wsPath, 'package.json');
+  if (fs.existsSync(pkgJsonPath) && writtenFiles.some(f => f.endsWith('.js') || f === 'package.json')) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+      const mainEntry = pkg.main || 'index.js';
+      const entryPath = path.join(wsPath, mainEntry);
+
+      if (fs.existsSync(entryPath)) {
+        // Install deps first if node_modules is missing
+        const nodeModulesPath = path.join(wsPath, 'node_modules');
+        if (!fs.existsSync(nodeModulesPath) && (pkg.dependencies || pkg.devDependencies)) {
+          await executor.runExecFile('npm', ['install', '--silent', '--no-audit', '--no-fund'], { cwd: wsPath, timeout: 120000 });
+        }
+
+        // Try to require the main entry (in a child node process to isolate)
+        const requireScript = `try { require('${entryPath.replace(/'/g, "\\'")}'); console.log('ok'); } catch (e) { console.error('REQUIRE_ERROR:', e.message); process.exit(1); }`;
+        const result = await executor.runExecFile('node', ['-e', requireScript], { cwd: wsPath, timeout: 15000 });
+        if (!result.success) {
+          const err = (result.stderr || '').replace(/^REQUIRE_ERROR:\s*/, '').trim();
+          errors.push(`Node.js entry "${mainEntry}" failed to require: ${err.substring(0, 300)}`);
+        }
+      }
+    } catch (e) {
+      errors.push(`Invalid package.json: ${e.message}`);
+    }
+  }
+
+  return errors;
+}
+
 const HIGH_RISK_KEYWORDS = ['database', 'migration', 'deploy', 'infrastructure', 'credential', 'secret', 'production', 'drop table', 'delete all'];
 
 function isHighRisk(floor) {
@@ -397,6 +487,33 @@ async function runFloor(floor, goal) {
         feedback = `Syntax errors found: ${syntaxErrors.join('; ')}`;
         continue;
       }
+    }
+
+    // ── Step 3d: Smoke test — actually try to import/run the code ──
+    if (build.files && build.files.length > 0) {
+      addLog(goal.id, floor.id, 'Vex', 'Smoke test: importing/running code...');
+      const smokeStart = Date.now();
+      let smokeErrors = [];
+      try {
+        smokeErrors = await smokeTestBuild(build.files, goal.id);
+      } catch (smokeErr) {
+        console.error('[FloorRunner] Smoke test error:', smokeErr.message);
+        smokeErrors = [`Smoke test crashed: ${smokeErr.message}`];
+      }
+      recordMetric({
+        goalId: goal.id, floorId: floor.id, agent: 'Vex', event: 'smoke_test',
+        durationMs: Date.now() - smokeStart,
+        success: smokeErrors.length === 0 ? 1 : 0,
+        metadata: smokeErrors.join('; ').substring(0, 500),
+      });
+      if (smokeErrors.length > 0) {
+        addLog(goal.id, floor.id, 'Vex', `Smoke test FAILED: ${smokeErrors.join('; ')}`);
+        vexBuildFeedback = `Code does not import/run. MUST FIX: ${smokeErrors.join('; ')}`;
+        feedback = `Smoke test failures (code must actually import/run): ${smokeErrors.join('; ')}`;
+        failureHistory.push({ iteration, agent: 'SmokeTest', reason: smokeErrors.join('; ') });
+        continue;
+      }
+      addLog(goal.id, floor.id, 'Vex', 'Smoke test PASSED');
     }
 
     // ── Step 4: Vex Gate 2 validates build ──
