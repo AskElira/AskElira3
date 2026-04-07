@@ -592,29 +592,56 @@ async function handleTelegramMessage(userText) {
     }
   }
 
-  // ── Auto-route action requests to Claude Code ──
-  // If the user asks Hermes to DO something (browse, install, run, download, fetch, pip, npm),
-  // route to Claude Code which can actually execute. Hermes alone can only generate text.
-  const actionMatch = userText.match(/^(browse|install|run|download|fetch|pip3?\s+install|npm\s+install|cd\s+|git\s+clone|curl\s+|wget\s+)\s*(.*)/i)
-    || (/(https?:\/\/\S+)/.test(userText) && /\b(install|setup|add|get|download|browse|fetch|look at|check out)\b/i.test(userText) && userText.match(/(.*)/));
-  if (actionMatch) {
-    const task = userText; // pass the full message as the task
+  // ── Hermes powers: /hermes and natural-language action requests route to Claude Code ──
+  // Elira/Hermes on text-chat alone cannot read, edit, or run files. When the user asks her
+  // to DO something (fix, debug, read, modify, run, install, browse), we route to Claude Code
+  // which has filesystem + shell access scoped to the relevant goal workspace.
+
+  // Explicit /hermes slash command (/ already stripped upstream → "hermes <task>")
+  const hermesSlashMatch = /^hermes\s+(.+)$/i.test(userText)
+    ? userText.replace(/^hermes\s+/i, '').trim()
+    : null;
+
+  // Natural-language action detection: command verbs, URLs, or file references
+  const ACTION_VERBS = /^\s*(browse|install|run|download|fetch|pip3?\s+install|npm\s+install|cd\s+|git\s+|curl\s+|wget\s+|fix|debug|read|modify|edit|update|check|inspect|patch|repair|diagnose|investigate|look\s+at|show\s+me|open)\b/i;
+  const URL_WITH_VERB = /(https?:\/\/\S+)/.test(userText) && /\b(install|setup|add|get|download|browse|fetch|look|check|read|use)\b/i.test(userText);
+  const FILE_REFERENCE = /\b[\w-]+\.(py|js|ts|mjs|cjs|jsx|tsx|html|css|json|yaml|yml|md|sh|toml|conf|ini|env)\b/i.test(userText);
+
+  const isAction = hermesSlashMatch !== null || ACTION_VERBS.test(userText) || URL_WITH_VERB || FILE_REFERENCE;
+
+  if (isAction) {
+    const task = hermesSlashMatch || userText;
     const { claudeCode } = require('../claude-code');
     const goals = listGoals();
-    const targetGoal = goals[0];
+
+    // Try to find the most relevant goal based on keyword overlap with the task
+    let targetGoal = null;
+    const taskLower = task.toLowerCase();
+    for (const g of goals) {
+      const goalWords = g.text.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+      const matches = goalWords.filter(w => taskLower.includes(w)).length;
+      if (matches >= 2 || (matches >= 1 && g.status === 'goal_met')) {
+        targetGoal = g;
+        break;
+      }
+    }
+    if (!targetGoal) targetGoal = goals.find(g => g.status === 'goal_met') || goals[0];
+
     const cwd = targetGoal ? workspace.getWorkspacePath(targetGoal.id) : path.resolve(__dirname, '..', '..');
-    const contextualTask = `You are working in the AskElira3 project at ${path.resolve(__dirname, '..', '..')}. The workspace for this task is at ${cwd}.\n\nThe user asked: ${task}\n\nExecute this task. If it involves a URL, fetch/read it. If it involves installing, run the install command. Report what you did.`;
-    await tgReply(`Routing to Claude Code (action detected)...`);
+    const goalContext = targetGoal ? `\n\nRelevant goal: "${targetGoal.text}" (${targetGoal.status})\nWorkspace: ${cwd}` : '';
+    const contextualTask = `You are Hermes with filesystem + shell access via Claude Code. You are working inside the AskElira3 project at ${path.resolve(__dirname, '..', '..')}.${goalContext}\n\nThe user said: ${task}\n\nExecute this task. Read files, make edits, run commands as needed. If it involves fixing a build, read the relevant files first, make the fix, and report what you changed. If the user wants something launched, use the existing launcher API.`;
+
+    await tgReply(`Hermes: working on "${task.substring(0, 60)}"${targetGoal ? `\n(in ${targetGoal.text.substring(0, 40)})` : ''}`);
     setImmediate(async () => {
       try {
         const result = await claudeCode(contextualTask, { cwd });
         if (result.success) {
           const output = result.output.length > 3500 ? result.output.substring(0, 3500) + '\n...(truncated)' : result.output;
-          await tgReply(`*Claude Code* (${Math.round(result.durationMs / 1000)}s)\n\n${output}`);
+          await tgReply(`*Hermes* (${Math.round(result.durationMs / 1000)}s)\n\n${output}`);
         } else {
-          await tgReply(`Claude Code failed: ${result.error.substring(0, 500)}`);
+          await tgReply(`Hermes failed: ${result.error.substring(0, 500)}`);
         }
-      } catch (err) { await tgReply(`Claude Code error: ${err.message}`); }
+      } catch (err) { await tgReply(`Hermes error: ${err.message}`); }
     });
     return;
   }
