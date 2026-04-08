@@ -267,6 +267,15 @@ async function handleTelegramMessage(userText) {
   // Store inbound Telegram message
   await addTelegramMessage('user', userText);
 
+  // Auto-capture any credentials the user shared so Hermes remembers them
+  try {
+    const credentials = require('../credentials');
+    const captured = credentials.captureFromMessage(userText, 'telegram');
+    if (captured.length > 0) {
+      console.log(`[Credentials] Captured from user: ${captured.map(c => c.name).join(', ')}`);
+    }
+  } catch (e) { console.error('[Credentials] capture failed:', e.message); }
+
   // Fetch recent conversation for context
   const recentMessages = getRecentTelegramMessages(10);
 
@@ -660,7 +669,14 @@ async function handleTelegramMessage(userText) {
       ? '\n\nIMPORTANT: The user provided an API key/secret in their message. Extract it, write it to the appropriate .env file in the workspace (create if needed), and never echo the key back in your response. Use placeholders like "sk-...****" when describing what you did.'
       : '';
 
-    const contextualTask = `You are Hermes with filesystem + shell access via Claude Code. You are working inside the AskElira3 project at ${path.resolve(__dirname, '..', '..')}.${goalContext}\n\nThe user said: ${task}\n\nExecute this task end-to-end. You can:\n- Read files in the workspace\n- Edit/create files\n- Run pip install, npm install, python3, node, etc.\n- Start processes (use & or nohup for long-running ones)\n- Check if things actually work after fixing them\n\nIf the user wants something fixed: read the files, make the fix, verify it works.\nIf the user wants something run: install deps, start it, report the result.\nIf the user references "it" or "this", they mean the workspace above.${secretNote}`;
+    // Inject known credentials so Hermes never asks for what's already set
+    let credentialContext = '';
+    try {
+      const credentials = require('../credentials');
+      credentialContext = credentials.buildCredentialContext(cwd);
+    } catch (_) {}
+
+    const contextualTask = `You are Hermes with filesystem + shell access via Claude Code. You are working inside the AskElira3 project at ${path.resolve(__dirname, '..', '..')}.${goalContext}${credentialContext}\n\nThe user said: ${task}\n\nExecute this task end-to-end. You can:\n- Read files in the workspace\n- Edit/create files\n- Run pip install, npm install, python3, node, etc.\n- Start processes (use & or nohup for long-running ones)\n- Check if things actually work after fixing them\n\nRules:\n- NEVER ask the user for credentials listed in the KNOWN CREDENTIALS section above. Read them from the workspace .env or pull from the global store at ~/Desktop/askelira3/data/credentials.json.\n- If the user wants something fixed: read the files, make the fix, verify it works.\n- If the user wants something run: install deps, start it, report the result.\n- If the user references "it" or "this", they mean the workspace above.${secretNote}`;
 
     // Track this task so follow-up messages can check its status
     pendingHermesTask = {
@@ -710,7 +726,9 @@ async function handleTelegramMessage(userText) {
       return words.some(w => task.toLowerCase().includes(w));
     }) || goals[0];
     const cwd = targetGoal ? workspace.getWorkspacePath(targetGoal.id) : path.resolve(__dirname, '..', '..');
-    const contextualTask = `You are working in the AskElira3 project at ${path.resolve(__dirname, '..', '..')}. The workspace for this task is at ${cwd}.\n\nTask: ${task}`;
+    let credCtx = '';
+    try { credCtx = require('../credentials').buildCredentialContext(cwd); } catch (_) {}
+    const contextualTask = `You are working in the AskElira3 project at ${path.resolve(__dirname, '..', '..')}. The workspace for this task is at ${cwd}.${credCtx}\n\nTask: ${task}\n\nNEVER ask for credentials listed under KNOWN CREDENTIALS above — read them from .env directly.`;
     pendingHermesTask = {
       description: task,
       goalName: targetGoal ? targetGoal.text.substring(0, 60) : null,
@@ -1006,7 +1024,9 @@ async function handleTelegramMessage(userText) {
     if (!targetGoal) targetGoal = goals[0];
 
     const cwd = targetGoal ? workspace.getWorkspacePath(targetGoal.id) : path.resolve(__dirname, '..', '..');
-    const contextualTask = `You are working in the AskElira3 project at ${path.resolve(__dirname, '..', '..')}. The workspace for this task is at ${cwd}.\n\nTask: ${task}`;
+    let credCtx2 = '';
+    try { credCtx2 = require('../credentials').buildCredentialContext(cwd); } catch (_) {}
+    const contextualTask = `You are working in the AskElira3 project at ${path.resolve(__dirname, '..', '..')}. The workspace for this task is at ${cwd}.${credCtx2}\n\nTask: ${task}\n\nNEVER ask for credentials listed under KNOWN CREDENTIALS above — read them from .env directly.`;
     pendingHermesTask = {
       description: task,
       goalName: targetGoal ? targetGoal.text.substring(0, 60) : null,
