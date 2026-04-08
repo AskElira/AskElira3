@@ -293,11 +293,13 @@ async function handleTelegramMessage(userText) {
   // ════════════════════════════════════════════════════════════════
 
   if (/^update$/i.test(lower)) {
-    await tgReply('Updating Hermes...');
+    await tgReply('Checking Hermes upstream for updates...');
     const { exec } = require('child_process');
     const fs = require('fs');
     const cwd = path.resolve(__dirname, '..', '..');
     const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', HOME: process.env.HOME || '/Users/openclawd' };
+    const HERMES_REPO = 'https://github.com/NousResearch/hermes-agent';
+    const VERSION_FILE = path.resolve(cwd, 'data', 'hermes-version.json');
 
     const run = (cmd, timeout = 60000) => new Promise((resolve) => {
       exec(cmd, { cwd, timeout, env }, (err, stdout, stderr) => {
@@ -306,23 +308,36 @@ async function handleTelegramMessage(userText) {
       });
     });
 
-    // Step 1: pull AskElira3 origin (actual self-update)
-    const pull = await run('git pull origin main 2>&1', 60000);
-    if (!pull.ok) {
-      await tgReply(`Update failed:\n${pull.output}`);
+    // Fetch the latest from NousResearch/hermes-agent (the real Hermes upstream)
+    const fetchResult = await run(`git fetch ${HERMES_REPO} main 2>&1`, 30000);
+    if (!fetchResult.ok) {
+      await tgReply(`Update check failed:\n${fetchResult.output}`);
       return;
     }
 
-    const wasUpToDate = /Already up to date/i.test(pull.output);
-    const shortPull = pull.output.split('\n').slice(-4).join('\n');
-
-    if (wasUpToDate) {
-      await tgReply(`*Already up to date*\n\nNothing to pull from AskElira3/main.\n\n${shortPull}`);
+    const latestCommit = await run('git rev-parse FETCH_HEAD', 5000);
+    if (!latestCommit.ok) {
+      await tgReply('Could not read upstream commit.');
       return;
     }
 
-    await tgReply(`*Update Applied*\n\n${shortPull}\n\nRestarting...`);
-    setTimeout(() => process.exit(0), 1000);
+    // Track last-seen commit so we only alert on real changes
+    let lastSynced = '';
+    try { lastSynced = JSON.parse(fs.readFileSync(VERSION_FILE, 'utf8')).commit || ''; } catch (_) {}
+
+    if (latestCommit.output === lastSynced) {
+      await tgReply(`*Hermes is up to date*\n\nLatest: \`${latestCommit.output.substring(0, 8)}\`\nNo new commits on NousResearch/hermes-agent main.`);
+      return;
+    }
+
+    // Show new commits
+    const logResult = await run(`git log --oneline FETCH_HEAD -10 2>&1`, 5000);
+    const commits = logResult.ok ? logResult.output : 'Could not read commit log';
+
+    // Save the new version so future checks only flag NEWER commits
+    fs.writeFileSync(VERSION_FILE, JSON.stringify({ commit: latestCommit.output, checkedAt: new Date().toISOString() }, null, 2));
+
+    await tgReply(`*Hermes Update Available*\n\nLatest: \`${latestCommit.output.substring(0, 8)}\`\nPrevious: \`${lastSynced.substring(0, 8) || 'none'}\`\n\nRecent commits from NousResearch/hermes-agent:\n${commits}`);
     return;
   }
 
