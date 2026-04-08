@@ -163,6 +163,11 @@ let resumeConfirmState = { waiting: false, goalId: null, goalText: null };
 let buildConfirmState = { waiting: false, goalText: null };
 let deleteConfirmState = { waiting: false, goalId: null, goalText: null };
 
+// Pending Claude Code/Hermes tasks — so follow-up messages ("is it done?") can
+// check on the active task instead of being treated as new commands.
+// Keyed by 'telegram' (single-user bot) — could be per-chat-id if multi-user.
+let pendingHermesTask = null; // { description, goalName, startedAt, status, result, error }
+
 function clearResumeConfirm() {
   resumeConfirmState = { waiting: false, goalId: null, goalText: null };
 }
@@ -288,13 +293,11 @@ async function handleTelegramMessage(userText) {
   // ════════════════════════════════════════════════════════════════
 
   if (/^update$/i.test(lower)) {
-    await tgReply('Checking for Hermes updates...');
+    await tgReply('Updating Hermes...');
     const { exec } = require('child_process');
     const fs = require('fs');
     const cwd = path.resolve(__dirname, '..', '..');
     const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', HOME: process.env.HOME || '/Users/openclawd' };
-    const HERMES_REPO = 'https://github.com/NousResearch/hermes-agent';
-    const VERSION_FILE = path.resolve(cwd, 'data', 'hermes-version.json');
 
     const run = (cmd, timeout = 60000) => new Promise((resolve) => {
       exec(cmd, { cwd, timeout, env }, (err, stdout, stderr) => {
@@ -303,61 +306,21 @@ async function handleTelegramMessage(userText) {
       });
     });
 
-    // Fetch latest from Hermes upstream
-    const fetchResult = await run(`git fetch ${HERMES_REPO} main 2>&1`, 30000);
-    if (!fetchResult.ok) {
-      await tgReply(`Update check failed:\n${fetchResult.output}`);
-      return;
-    }
-
-    // Get latest upstream commit
-    const latestCommit = await run('git rev-parse FETCH_HEAD', 5000);
-    if (!latestCommit.ok) {
-      await tgReply('Could not read upstream commit.');
-      return;
-    }
-
-    // Check what we last synced
-    let lastSynced = '';
-    try { lastSynced = JSON.parse(fs.readFileSync(VERSION_FILE, 'utf8')).commit || ''; } catch (_) {}
-
-    if (latestCommit.output === lastSynced) {
-      await tgReply('*Hermes is up to date.*\n\nNo new changes from NousResearch/hermes-agent.');
-      return;
-    }
-
-    // Get commit log of what's new
-    const logResult = await run(`git log --oneline FETCH_HEAD -10 2>&1`, 5000);
-    const commits = logResult.ok ? logResult.output : 'Could not read commit log';
-
-    // Save the new version
-    fs.writeFileSync(VERSION_FILE, JSON.stringify({ commit: latestCommit.output, checkedAt: new Date().toISOString() }, null, 2));
-
-    await tgReply(`*Hermes Update Available*\n\nLatest: \`${latestCommit.output.substring(0, 8)}\`\nPrevious: \`${lastSynced.substring(0, 8) || 'none'}\`\n\nRecent commits:\n${commits}\n\nUse \`/apply update\` to merge changes.`);
-    return;
-  }
-
-  if (/^apply update$/i.test(lower)) {
-    await tgReply('Applying Hermes update...');
-    const { exec } = require('child_process');
-    const cwd = path.resolve(__dirname, '..', '..');
-    const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', HOME: process.env.HOME || '/Users/openclawd' };
-
-    const run = (cmd, timeout = 60000) => new Promise((resolve) => {
-      exec(cmd, { cwd, timeout, env }, (err, stdout, stderr) => {
-        if (err) resolve({ ok: false, output: (stderr || err.message).substring(0, 500) });
-        else resolve({ ok: true, output: (stdout || '').trim() });
-      });
-    });
-
-    // Pull from own repo (AskElira3) — this is the safe update path
+    // Step 1: pull AskElira3 origin (actual self-update)
     const pull = await run('git pull origin main 2>&1', 60000);
     if (!pull.ok) {
-      await tgReply(`Apply failed:\n${pull.output}`);
+      await tgReply(`Update failed:\n${pull.output}`);
       return;
     }
 
+    const wasUpToDate = /Already up to date/i.test(pull.output);
     const shortPull = pull.output.split('\n').slice(-4).join('\n');
+
+    if (wasUpToDate) {
+      await tgReply(`*Already up to date*\n\nNothing to pull from AskElira3/main.\n\n${shortPull}`);
+      return;
+    }
+
     await tgReply(`*Update Applied*\n\n${shortPull}\n\nRestarting...`);
     setTimeout(() => process.exit(0), 1000);
     return;
@@ -367,6 +330,30 @@ async function handleTelegramMessage(userText) {
     await tgReply('Restarting Hermes...');
     setTimeout(() => process.exit(0), 500);
     return;
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // STEP 0.5: Pending Hermes task follow-up detection
+  // If there's a Hermes/Claude Code task in flight and the user sends a
+  // follow-up ("is it done?", "how's it going?"), report on THAT task
+  // instead of starting a new command flow.
+  // ════════════════════════════════════════════════════════════════
+  if (pendingHermesTask && (Date.now() - pendingHermesTask.startedAt < 15 * 60 * 1000)) {
+    const FOLLOWUP_PATTERNS = /^(is it done|is it working|is it finished|is it running|how.?s it going|what.?s happening|what.?s the status|any progress|any update|progress|status\??|did it work|did it finish|finished\??|done\??|working\??|and\??|\?|yes\??|ok\??|tell me|update me|let me know)$/i;
+    if (FOLLOWUP_PATTERNS.test(lower)) {
+      const elapsed = Math.round((Date.now() - pendingHermesTask.startedAt) / 1000);
+      if (pendingHermesTask.status === 'running') {
+        return tgReply(`Still working on: "${pendingHermesTask.description.substring(0, 100)}"\n\n(${elapsed}s elapsed)${pendingHermesTask.goalName ? `\nWorkspace: ${pendingHermesTask.goalName}` : ''}\n\nI'll message you when it's done.`);
+      }
+      if (pendingHermesTask.status === 'done') {
+        const out = (pendingHermesTask.result || '').substring(0, 2500);
+        const age = Math.round((Date.now() - (pendingHermesTask.finishedAt || pendingHermesTask.startedAt)) / 1000);
+        return tgReply(`*Last task done* (finished ${age}s ago)\n\n${out}`);
+      }
+      if (pendingHermesTask.status === 'failed') {
+        return tgReply(`*Last task failed*\n\n${(pendingHermesTask.error || 'unknown error').substring(0, 500)}`);
+      }
+    }
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -660,17 +647,39 @@ async function handleTelegramMessage(userText) {
 
     const contextualTask = `You are Hermes with filesystem + shell access via Claude Code. You are working inside the AskElira3 project at ${path.resolve(__dirname, '..', '..')}.${goalContext}\n\nThe user said: ${task}\n\nExecute this task end-to-end. You can:\n- Read files in the workspace\n- Edit/create files\n- Run pip install, npm install, python3, node, etc.\n- Start processes (use & or nohup for long-running ones)\n- Check if things actually work after fixing them\n\nIf the user wants something fixed: read the files, make the fix, verify it works.\nIf the user wants something run: install deps, start it, report the result.\nIf the user references "it" or "this", they mean the workspace above.${secretNote}`;
 
-    await tgReply(`Hermes: working on "${task.substring(0, 60)}"${targetGoal ? `\n(in ${targetGoal.text.substring(0, 40)})` : ''}`);
+    // Track this task so follow-up messages can check its status
+    pendingHermesTask = {
+      description: task,
+      goalName: targetGoal ? targetGoal.text.substring(0, 60) : null,
+      startedAt: Date.now(),
+      status: 'running',
+      result: null,
+      error: null,
+      finishedAt: null,
+    };
+
+    await tgReply(`Hermes: working on "${task.substring(0, 60)}"${targetGoal ? `\n(in ${targetGoal.text.substring(0, 40)})` : ''}\n\nAsk "is it done?" anytime for a status check.`);
     setImmediate(async () => {
       try {
         const result = await claudeCode(contextualTask, { cwd });
         if (result.success) {
           const output = result.output.length > 3500 ? result.output.substring(0, 3500) + '\n...(truncated)' : result.output;
-          await tgReply(`*Hermes* (${Math.round(result.durationMs / 1000)}s)\n\n${output}`);
+          pendingHermesTask.status = 'done';
+          pendingHermesTask.result = output;
+          pendingHermesTask.finishedAt = Date.now();
+          await tgReply(`*Hermes done* (${Math.round(result.durationMs / 1000)}s)\n\n${output}`);
         } else {
+          pendingHermesTask.status = 'failed';
+          pendingHermesTask.error = result.error;
+          pendingHermesTask.finishedAt = Date.now();
           await tgReply(`Hermes failed: ${result.error.substring(0, 500)}`);
         }
-      } catch (err) { await tgReply(`Hermes error: ${err.message}`); }
+      } catch (err) {
+        pendingHermesTask.status = 'failed';
+        pendingHermesTask.error = err.message;
+        pendingHermesTask.finishedAt = Date.now();
+        await tgReply(`Hermes error: ${err.message}`);
+      }
     });
     return;
   }
@@ -687,17 +696,35 @@ async function handleTelegramMessage(userText) {
     }) || goals[0];
     const cwd = targetGoal ? workspace.getWorkspacePath(targetGoal.id) : path.resolve(__dirname, '..', '..');
     const contextualTask = `You are working in the AskElira3 project at ${path.resolve(__dirname, '..', '..')}. The workspace for this task is at ${cwd}.\n\nTask: ${task}`;
+    pendingHermesTask = {
+      description: task,
+      goalName: targetGoal ? targetGoal.text.substring(0, 60) : null,
+      startedAt: Date.now(),
+      status: 'running',
+      result: null, error: null, finishedAt: null,
+    };
     await tgReply(`Claude Code: "${task.substring(0, 60)}"...`);
     setImmediate(async () => {
       try {
         const result = await claudeCode(contextualTask, { cwd });
         if (result.success) {
           const output = result.output.length > 3500 ? result.output.substring(0, 3500) + '\n...(truncated)' : result.output;
-          await tgReply(`*Claude Code* (${Math.round(result.durationMs / 1000)}s)\n\n${output}`);
+          pendingHermesTask.status = 'done';
+          pendingHermesTask.result = output;
+          pendingHermesTask.finishedAt = Date.now();
+          await tgReply(`*Claude Code done* (${Math.round(result.durationMs / 1000)}s)\n\n${output}`);
         } else {
+          pendingHermesTask.status = 'failed';
+          pendingHermesTask.error = result.error;
+          pendingHermesTask.finishedAt = Date.now();
           await tgReply(`Claude Code failed: ${result.error.substring(0, 500)}`);
         }
-      } catch (err) { await tgReply(`Claude Code error: ${err.message}`); }
+      } catch (err) {
+        pendingHermesTask.status = 'failed';
+        pendingHermesTask.error = err.message;
+        pendingHermesTask.finishedAt = Date.now();
+        await tgReply(`Claude Code error: ${err.message}`);
+      }
     });
     return;
   }
@@ -965,6 +992,13 @@ async function handleTelegramMessage(userText) {
 
     const cwd = targetGoal ? workspace.getWorkspacePath(targetGoal.id) : path.resolve(__dirname, '..', '..');
     const contextualTask = `You are working in the AskElira3 project at ${path.resolve(__dirname, '..', '..')}. The workspace for this task is at ${cwd}.\n\nTask: ${task}`;
+    pendingHermesTask = {
+      description: task,
+      goalName: targetGoal ? targetGoal.text.substring(0, 60) : null,
+      startedAt: Date.now(),
+      status: 'running',
+      result: null, error: null, finishedAt: null,
+    };
     await tgReply(`Sending to Claude Code: "${task.substring(0, 60)}"...`);
 
     setImmediate(async () => {
@@ -974,14 +1008,23 @@ async function handleTelegramMessage(userText) {
           const output = result.output.length > 3500
             ? result.output.substring(0, 3500) + '\n\n... (truncated)'
             : result.output;
-          await tgReply(`*Claude Code* (${Math.round(result.durationMs / 1000)}s)\n\n${output}`);
+          pendingHermesTask.status = 'done';
+          pendingHermesTask.result = output;
+          pendingHermesTask.finishedAt = Date.now();
+          await tgReply(`*Claude Code done* (${Math.round(result.durationMs / 1000)}s)\n\n${output}`);
         } else {
+          pendingHermesTask.status = 'failed';
+          pendingHermesTask.error = result.error;
+          pendingHermesTask.finishedAt = Date.now();
           await tgReply(`Claude Code failed: ${result.error.substring(0, 500)}`);
         }
         if (targetGoal) {
           addLog(targetGoal.id, null, 'Elira', `Claude Code task: ${task.substring(0, 100)} — ${result.success ? 'success' : 'failed'} (${result.durationMs}ms)`);
         }
       } catch (err) {
+        pendingHermesTask.status = 'failed';
+        pendingHermesTask.error = err.message;
+        pendingHermesTask.finishedAt = Date.now();
         await tgReply(`Claude Code error: ${err.message}`);
       }
     });
