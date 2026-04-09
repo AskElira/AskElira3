@@ -52,5 +52,31 @@ async function notifyStevenAlert(floorName, issue) {
   await sendTelegram(`🔧 *Steven* — ${floorName}\n${issue.substring(0, 200)}`);
 }
 
-module.exports = { sendTelegram, notifyFloorLive, notifyFloorBlocked, notifyGoalComplete, notifyStevenAlert, setSilent };
+/**
+ * Upload a local video file to the user's Telegram chat via sendVideo.
+ * @param {string} filePath — absolute path to an .mp4 file
+ * @param {string} [caption]
+ */
+async function sendTelegramVideo(filePath, caption = '') {
+  if (!config.hasTelegram) throw new Error('Telegram not configured');
+  const fs = require('fs');
+  if (!fs.existsSync(filePath)) throw new Error(`Video file not found: ${filePath}`);
+
+  const url = `https://api.telegram.org/bot${config.telegramBotToken}/sendVideo`;
+  const form = new FormData();
+  form.append('chat_id', config.telegramChatId);
+  if (caption) form.append('caption', caption);
+  // Stream the file as a Blob
+  const buffer = fs.readFileSync(filePath);
+  form.append('video', new Blob([buffer], { type: 'video/mp4' }), 'video.mp4');
+
+  const res = await fetch(url, { method: 'POST', body: form });
+  const data = await res.json();
+  if (!res.ok || !data.ok) {
+    throw new Error(`sendVideo failed: ${JSON.stringify(data)}`);
+  }
+  return data.result;
+}
+
+module.exports = { sendTelegram, sendTelegramVideo, notifyFloorLive, notifyFloorBlocked, notifyGoalComplete, notifyStevenAlert, setSilent };
 

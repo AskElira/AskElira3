@@ -411,7 +411,7 @@ async function handleTelegramMessage(userText) {
   // Underscore or space after prefix both work: /elira_launch OR /elira launch
   // ════════════════════════════════════════════════════════════════
 
-  const slashMatch = userText.match(/^(?:elira|hermes)[_\s]+(launch|run|stop|build|status|fix|goals|files|running|launches|restart|update|help|kill|chat|digest)\b\s*(.*)$/i);
+  const slashMatch = userText.match(/^(?:elira|hermes)[_\s]+(launch|run|stop|build|status|fix|goals|files|running|launches|restart|update|help|kill|chat|digest|video|image|voice)\b\s*(.*)$/i);
   if (slashMatch) {
     const cmd = slashMatch[1].toLowerCase();
     const arg = slashMatch[2].trim();
@@ -535,6 +535,51 @@ async function handleTelegramMessage(userText) {
       return;
     }
 
+    if (cmd === 'video') {
+      if (!arg || arg.length < 3) {
+        return tgReply('Usage: /elira_video <prompt>\n\nExample: /elira_video a cat riding a bike in Tokyo, cinematic');
+      }
+      await tgReply(`🎬 Generating video: "${arg.substring(0, 100)}"\n\nThis takes 2-5 minutes. I'll send it when it's ready.`);
+      const { generateVideo } = require('../video-gen');
+      const { sendTelegramVideo, sendTelegram } = require('../notify');
+      pendingHermesTask = {
+        description: `Generate video: ${arg.substring(0, 80)}`,
+        goalName: 'video-gen',
+        startedAt: Date.now(),
+        status: 'running',
+        result: null, error: null, finishedAt: null,
+      };
+      setImmediate(async () => {
+        try {
+          let lastStatus = null;
+          const result = await generateVideo(arg, {
+            onProgress: (status) => {
+              if (status !== lastStatus && status !== 'Success') {
+                lastStatus = status;
+                sendTelegram(`🎬 ${status}...`).catch(() => {});
+              }
+            },
+          });
+          pendingHermesTask.status = 'done';
+          pendingHermesTask.result = `Video generated in ${Math.round(result.durationMs / 1000)}s (task ${result.taskId})`;
+          pendingHermesTask.finishedAt = Date.now();
+          await sendTelegramVideo(result.path, `🎬 "${arg.substring(0, 200)}"\n\nGenerated in ${Math.round(result.durationMs / 1000)}s`);
+          // Cleanup temp file after send
+          try { require('fs').unlinkSync(result.path); } catch (_) {}
+        } catch (err) {
+          pendingHermesTask.status = 'failed';
+          pendingHermesTask.error = err.message;
+          pendingHermesTask.finishedAt = Date.now();
+          await tgReply(`❌ Video generation failed: ${err.message.substring(0, 400)}`);
+        }
+      });
+      return;
+    }
+
+    if (cmd === 'image' || cmd === 'voice') {
+      return tgReply(`${cmd} generation is not wired up yet. Only /elira_video is available.`);
+    }
+
     if (cmd === 'update') {
       // Delegate to the /update handler by re-setting userText
       userText = 'update';
@@ -543,19 +588,23 @@ async function handleTelegramMessage(userText) {
 
     if (cmd === 'help') {
       return tgReply(`*Elira/Hermes commands*\n\n` +
-        `/elira_launch [name|#]  — run a build\n` +
-        `/elira_stop [name|#]    — stop a running build\n` +
-        `/elira_running          — list running builds\n` +
+        `*Builds*\n` +
         `/elira_build <desc>     — start a new build\n` +
         `/elira_status           — list all goals\n` +
-        `/elira_fix [name|#]     — Steven fix a blocked floor\n` +
         `/elira_files [name|#]   — list workspace files\n` +
+        `/elira_fix [name|#]     — Steven fix a blocked floor\n\n` +
+        `*Launcher*\n` +
+        `/elira_launch [name|#]  — run a build on a port\n` +
+        `/elira_stop [name|#]    — stop a running build\n` +
+        `/elira_running          — list running builds\n\n` +
+        `*Generation*\n` +
+        `/elira_video <prompt>   — generate a video via MiniMax\n\n` +
+        `*System*\n` +
         `/elira_digest           — send daily digest now\n` +
         `/elira_update           — check Hermes upstream\n` +
         `/elira_restart          — restart the server\n\n` +
         `Underscore or space after prefix both work.\n` +
-        `Everything else → Hermes chat with full goal context.\n` +
-        `Action verbs (fix/debug/install/run + file references) auto-route to Claude Code.`);
+        `Everything else → Hermes chat with full goal context.`);
     }
 
     if (cmd === 'chat') {
