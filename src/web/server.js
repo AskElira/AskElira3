@@ -260,16 +260,13 @@ User message: "${userText}"
 
 Available intents:
 - build: User wants to create/build something NEW. resolved_target = what to build (be specific).
-- status: Check status of goals/floors/builds.
 - continue: Resume an incomplete/paused goal.
 - delete: Remove/trash/nuke a goal. resolved_target = which goal (name or number).
-- fix: Fix a blocked floor (trigger Steven).
 - digest: Send the daily email digest now.
-- files: Show workspace files.
 - notifications: View or change notification settings. Includes: stop/mute/silence/disable/enable alerts, change what gets notified, "stop Steven notifications", "mute floor alerts", "silence", etc.
 - steven_summary: Check what Steven has been doing recently (activity, history, log).
 - claude_code: User wants to use Claude Code for a task — coding, fixing, editing files, or any complex task. Triggers when user says "use claude", "claude code", "ask claude", "let claude handle it", or references Claude Code directly. resolved_target = the task description.
-- chat: General conversation, question, or anything that isn't a specific action.
+- chat: General conversation, question, or anything that isn't a specific action. PREFER THIS. When the user asks a question, wants information, says "status"/"what's going on"/"fix"/"files" — use chat. The system has /elira_X commands for explicit actions; chat responses get full goal context so Hermes can answer naturally.
 - ambiguous: Intent is genuinely unclear — could be multiple things. Use sparingly — prefer "chat" when in doubt.
 
 CRITICAL RULES:
@@ -746,61 +743,14 @@ async function handleTelegramMessage(userText) {
     return tgReply(result.ok ? `⏹ Stopped (was on port ${target.port})` : `Stop failed: ${result.error}`);
   }
 
-  // List currently running launches
-  if (/^running$|^launches$|^what.s running$/i.test(lower)) {
-    const launcher = require('../launcher');
-    const list = launcher.listRunning();
-    if (!list.length) return tgReply('No builds are currently running.');
-    const goals = listGoals();
-    const lines = list.map(r => {
-      const g = goals.find(g => g.id === r.goalId);
-      const name = g ? g.text.substring(0, 40) : r.goalId.substring(0, 8);
-      return `🚀 ${name}\n   ${r.url} · ${r.status} · ${r.kind}`;
-    });
-    return tgReply(`*Running builds*\n\n${lines.join('\n\n')}`);
-  }
-
-  if (/^(status|goals|what.s running|show goals)$/i.test(lower)) {
-    const goals = listGoals();
-    if (!goals.length) return tgReply('No goals yet. Send me something to build!');
-    const lines = goals.slice(0, 5).map(g => {
-      const floors = listFloors(g.id);
-      const live = floors.filter(f => f.status === 'live').length;
-      const blocked = floors.filter(f => f.status === 'blocked').length;
-      const icon = g.status === 'goal_met' ? '✅' : g.status === 'blocked' ? '🔴' : g.status === 'building' ? '🔨' : '⏳';
-      return `${icon} ${g.text.substring(0, 45)}\n   ${live}/${floors.length} live${blocked ? `, ${blocked} blocked` : ''}`;
-    });
-    return tgReply(`*Goals*\n\n${lines.join('\n\n')}`);
-  }
+  // Bare-word fast-paths (status/goals/files/fix/running) have been removed.
+  // Use explicit /elira_X commands for those actions. Everything else flows
+  // through the intent classifier + chat so Hermes can respond with context.
 
   if (/^(digest|send digest|send email|news)$/i.test(lower)) {
     await tgReply('Sending digest now...');
     triggerNow().catch(e => tgReply(`Digest error: ${e.message}`));
     return;
-  }
-
-  if (/^(files|workspace|show files|ls)$/i.test(lower)) {
-    const goals = listGoals();
-    if (!goals.length) return tgReply('No workspace yet — start a build first.');
-    const latest = goals[0];
-    const files = workspace.listFiles(latest.id);
-    if (!files.length) return tgReply('Workspace is empty.');
-    return tgReply(`*Workspace* — ${latest.text.substring(0, 40)}\n\n${files.map(f => `📄 ${f}`).join('\n')}`);
-  }
-
-  if (/^fix$/i.test(lower)) {
-    const { fixFloor } = require('../agents/steven');
-    const goals = listGoals();
-    for (const g of goals) {
-      const floors = listFloors(g.id);
-      const blocked = floors.find(f => f.status === 'blocked');
-      if (blocked) {
-        await tgReply(`*Steven* — fixing "${blocked.name}"...`);
-        fixFloor(blocked.id).catch(e => tgReply(`Fix error: ${e.message}`));
-        return;
-      }
-    }
-    return tgReply('No blocked floors found.');
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -1138,32 +1088,14 @@ async function handleTelegramMessage(userText) {
     return tgReply('No blocked floors found.');
   }
 
-  if (classification.intent === 'status') {
-    const goals = listGoals();
-    if (!goals.length) return tgReply('No goals yet. Send me something to build!');
-    const lines = goals.slice(0, 5).map(g => {
-      const floors = listFloors(g.id);
-      const live = floors.filter(f => f.status === 'live').length;
-      const blocked = floors.filter(f => f.status === 'blocked').length;
-      const icon = g.status === 'goal_met' ? '✅' : g.status === 'blocked' ? '🔴' : g.status === 'building' ? '🔨' : '⏳';
-      return `${icon} ${g.text.substring(0, 45)}\n   ${live}/${floors.length} live${blocked ? `, ${blocked} blocked` : ''}`;
-    });
-    return tgReply(`*Goals*\n\n${lines.join('\n\n')}`);
-  }
+  // 'status' and 'files' intents are NOT handled here — they flow through to
+  // the chat handler so Hermes can respond with full goal context. Users who
+  // want the old behavior should use /elira_status or /elira_files explicitly.
 
   if (classification.intent === 'digest') {
     await tgReply('Sending digest now...');
     triggerNow().catch(e => tgReply(`Digest error: ${e.message}`));
     return;
-  }
-
-  if (classification.intent === 'files') {
-    const goals = listGoals();
-    if (!goals.length) return tgReply('No workspace yet — start a build first.');
-    const latest = goals[0];
-    const files = workspace.listFiles(latest.id);
-    if (!files.length) return tgReply('Workspace is empty.');
-    return tgReply(`*Workspace* — ${latest.text.substring(0, 40)}\n\n${files.map(f => `📄 ${f}`).join('\n')}`);
   }
 
   if (classification.intent === 'notifications') {
