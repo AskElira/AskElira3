@@ -60,20 +60,45 @@ function detectEntryPoint(wsPath) {
     }
   }
 
-  // 3. Python web apps — check for Flask/FastAPI patterns
-  for (const f of ['server.py', 'app.py', 'main.py', 'run.py', 'wsgi.py']) {
-    if (fs.existsSync(path.join(wsPath, f))) {
-      const content = fs.readFileSync(path.join(wsPath, f), 'utf8');
-      // FastAPI/uvicorn
-      if (/from fastapi|FastAPI\(/i.test(content)) {
-        const modName = f.replace('.py', '');
-        return { kind: 'fastapi', cmd: 'python3', args: ['-m', 'uvicorn', `${modName}:app`, '--host', '127.0.0.1', '--port', '__PORT__'] };
-      }
-      // Flask
-      if (/from flask|Flask\(/i.test(content)) {
-        return { kind: 'flask', cmd: 'python3', args: [f] };
-      }
-      // Generic Python script
+  // 3. Python apps — check preferred names first, then any .py with __main__
+  const pythonCandidates = [
+    'server.py', 'app.py', 'main.py', 'run.py', 'wsgi.py',
+    'bot.py', 'telegram_bot.py', 'cli.py', 'start.py', '__main__.py',
+  ];
+  // Also scan root for any .py file with if __name__ == '__main__'
+  try {
+    const rootFiles = fs.readdirSync(wsPath).filter(f => f.endsWith('.py') && !pythonCandidates.includes(f));
+    for (const f of rootFiles) {
+      try {
+        const content = fs.readFileSync(path.join(wsPath, f), 'utf8');
+        if (/if\s+__name__\s*==\s*['"]__main__['"]/.test(content)) {
+          pythonCandidates.push(f);
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+
+  for (const f of pythonCandidates) {
+    const filePath = path.join(wsPath, f);
+    if (!fs.existsSync(filePath)) continue;
+    let content = '';
+    try { content = fs.readFileSync(filePath, 'utf8'); } catch (_) { continue; }
+
+    // FastAPI/uvicorn
+    if (/from fastapi|FastAPI\(/i.test(content)) {
+      const modName = f.replace('.py', '');
+      return { kind: 'fastapi', cmd: 'python3', args: ['-m', 'uvicorn', `${modName}:app`, '--host', '127.0.0.1', '--port', '__PORT__'] };
+    }
+    // Flask
+    if (/from flask|Flask\(/i.test(content)) {
+      return { kind: 'flask', cmd: 'python3', args: [f] };
+    }
+    // Telegram bot (aiogram, python-telegram-bot, telebot)
+    if (/from aiogram|from telegram|import telegram|telebot|TeleBot/i.test(content)) {
+      return { kind: 'telegram-bot', cmd: 'python3', args: [f] };
+    }
+    // Generic Python script (must have __main__ or be a known entry name)
+    if (/if\s+__name__\s*==\s*['"]__main__['"]/.test(content) || ['main.py', 'app.py', 'run.py', 'server.py'].includes(f)) {
       return { kind: 'python', cmd: 'python3', args: [f] };
     }
   }

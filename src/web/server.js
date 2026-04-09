@@ -99,6 +99,58 @@ function saveTelegramOffset(off) {
   try { fs.writeFileSync(OFFSET_FILE, String(off), 'utf8'); } catch (_) {}
 }
 
+/**
+ * Fuzzy goal matcher — finds a goal by keyword overlap, number, or "it"/"this"
+ * resolution from conversation context. Returns the best match or null.
+ *
+ * @param {Array} goals — listGoals() result
+ * @param {string} query — what the user said (e.g. "video bot", "it", "3", "")
+ * @param {Array} recentMessages — for pronoun resolution
+ */
+function fuzzyFindGoal(goals, query, recentMessages = []) {
+  if (!goals || goals.length === 0) return null;
+
+  // Empty / pronoun → use conversation context or most recent goal_met
+  if (!query || /^(it|this|that|for me)$/i.test(query.trim())) {
+    // Check recent chat for any goal name match
+    const recentText = (recentMessages || []).slice(-8).map(m => m.content || '').join(' ').toLowerCase();
+    for (const g of goals) {
+      // Match on any 3+ significant words from the goal text
+      const goalWords = g.text.toLowerCase().split(/\s+/).filter(w => w.length > 3 && !/^(with|that|this|from|using|your|make|build|create)$/i.test(w));
+      const hits = goalWords.filter(w => recentText.includes(w)).length;
+      if (hits >= 2) return g;
+    }
+    return goals.find(g => g.status === 'goal_met') || goals[0];
+  }
+
+  // Numeric index (1-based)
+  if (/^\d+$/.test(query.trim())) {
+    const idx = parseInt(query.trim()) - 1;
+    return goals[idx] || null;
+  }
+
+  // Fuzzy word-overlap match: score each goal by how many query words match the goal text
+  const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !/^(the|a|an|for|to|me|please|now|it|this|that|with|on|in|and|or|my|your)$/i.test(w));
+  if (queryWords.length === 0) {
+    return goals.find(g => g.status === 'goal_met') || goals[0];
+  }
+
+  let bestScore = 0;
+  let bestGoal = null;
+  for (const g of goals) {
+    const goalLower = g.text.toLowerCase();
+    const matches = queryWords.filter(w => goalLower.includes(w)).length;
+    // Prefer goal_met builds on ties
+    const bonus = g.status === 'goal_met' ? 0.5 : 0;
+    const score = matches + bonus;
+    if (score > bestScore && matches >= 1) {
+      bestScore = score;
+      bestGoal = g;
+    }
+  }
+  return bestGoal;
+}
+
 function buildSystemContext(model, recentMessages) {
   const { listGoals, listFloors } = require('../db');
   const workspace = require('../pipeline/workspace');
@@ -357,6 +409,158 @@ async function handleTelegramMessage(userText) {
   }
 
   // ════════════════════════════════════════════════════════════════
+  // STEP 0.3: Explicit slash commands (/elira_launch, /elira_build, etc.)
+  // These bypass all NLP and always do exactly what they say.
+  // Underscore or space after prefix both work: /elira_launch OR /elira launch
+  // ════════════════════════════════════════════════════════════════
+
+  const slashMatch = userText.match(/^(?:elira|hermes)[_\s]+(launch|run|stop|build|status|fix|goals|files|running|launches|restart|update|help|kill|chat)\b\s*(.*)$/i);
+  if (slashMatch) {
+    const cmd = slashMatch[1].toLowerCase();
+    const arg = slashMatch[2].trim();
+    const launcher = require('../launcher');
+    const goals = listGoals();
+
+    if (cmd === 'launch' || cmd === 'run') {
+      const target = fuzzyFindGoal(goals, arg, recentMessages);
+      if (!target) {
+        const list = goals.slice(0, 8).map((g, i) => `${i + 1}. ${g.status === 'goal_met' ? '✅' : '⏳'} ${g.text.substring(0, 50)}`).join('\n');
+        return tgReply(`No match for "${arg}". Pick one:\n\n${list}\n\nUse /elira_launch <number> or /elira_launch <keywords>`);
+      }
+      await tgReply(`🚀 Launching "${target.text.substring(0, 50)}"...`);
+      setImmediate(async () => {
+        try {
+          const result = await launcher.launch(target.id);
+          if (result.ok) {
+            await tgReply(`✅ *Running*\n${target.text.substring(0, 50)}\n\n${result.url}\nPID: ${result.pid}\nKind: ${result.kind}`);
+          } else {
+            // Launch failed — auto-route to Hermes to diagnose/fix
+            await tgReply(`❌ Launch failed: ${result.error}\n\nRouting to Hermes to diagnose...`);
+            const { claudeCode } = require('../claude-code');
+            const cwd = workspace.getWorkspacePath(target.id);
+            let credCtx = '';
+            try { credCtx = require('../credentials').buildCredentialContext(cwd); } catch (_) {}
+            const fixTask = `You are Hermes with filesystem + shell access. A launch attempt failed in the workspace at ${cwd}.\n\nGoal: "${target.text}"\nError: ${result.error}${credCtx}\n\nYour job:\n1. List files in the workspace\n2. Find the actual entry point (look for telegram_bot.py, bot.py, main.py, app.py, server.py, or any .py with __name__ == '__main__')\n3. Install any deps from requirements.txt\n4. Start the process in the background with nohup or &\n5. Verify it's running and report the PID + how to reach it\n\nNEVER ask the user for credentials — they're already in .env.`;
+            pendingHermesTask = { description: `Fix launch failure for ${target.text.substring(0, 40)}`, goalName: target.text.substring(0, 60), startedAt: Date.now(), status: 'running', result: null, error: null, finishedAt: null };
+            try {
+              const r = await claudeCode(fixTask, { cwd });
+              if (r.success) {
+                pendingHermesTask.status = 'done';
+                pendingHermesTask.result = r.output;
+                pendingHermesTask.finishedAt = Date.now();
+                const out = r.output.length > 3500 ? r.output.substring(0, 3500) + '\n...(truncated)' : r.output;
+                await tgReply(`*Hermes fixed it* (${Math.round(r.durationMs / 1000)}s)\n\n${out}`);
+              } else {
+                pendingHermesTask.status = 'failed';
+                pendingHermesTask.error = r.error;
+                pendingHermesTask.finishedAt = Date.now();
+                await tgReply(`Hermes couldn't fix it: ${r.error.substring(0, 400)}`);
+              }
+            } catch (e) { await tgReply(`Hermes error: ${e.message}`); }
+          }
+        } catch (err) { tgReply(`Launch error: ${err.message}`); }
+      });
+      return;
+    }
+
+    if (cmd === 'stop' || cmd === 'kill') {
+      const running = launcher.listRunning();
+      if (running.length === 0) return tgReply('No builds are running.');
+      let target = null;
+      if (!arg) target = running[0];
+      else {
+        const matching = fuzzyFindGoal(goals, arg, recentMessages);
+        if (matching) target = running.find(r => r.goalId === matching.id);
+      }
+      if (!target) return tgReply(`No running build matches "${arg}".`);
+      const result = await launcher.stop(target.goalId);
+      return tgReply(result.ok ? `⏹ Stopped (was on port ${target.port})` : `Stop failed: ${result.error}`);
+    }
+
+    if (cmd === 'running' || cmd === 'launches') {
+      const list = launcher.listRunning();
+      if (!list.length) return tgReply('No builds running.');
+      const lines = list.map(r => {
+        const g = goals.find(g => g.id === r.goalId);
+        const name = g ? g.text.substring(0, 40) : r.goalId.substring(0, 8);
+        return `🚀 ${name}\n   ${r.url} · ${r.status} · ${r.kind}`;
+      });
+      return tgReply(`*Running*\n\n${lines.join('\n\n')}`);
+    }
+
+    if (cmd === 'status' || cmd === 'goals') {
+      if (!goals.length) return tgReply('No goals yet.');
+      const lines = goals.slice(0, 10).map((g, i) => {
+        const floors = listFloors(g.id);
+        const live = floors.filter(f => f.status === 'live').length;
+        const blocked = floors.filter(f => f.status === 'blocked').length;
+        const icon = g.status === 'goal_met' ? '✅' : g.status === 'blocked' ? '🔴' : g.status === 'building' ? '🔨' : '⏳';
+        return `${i + 1}. ${icon} ${g.text.substring(0, 45)}\n   ${live}/${floors.length} live${blocked ? `, ${blocked} blocked` : ''}`;
+      });
+      return tgReply(`*Goals*\n\n${lines.join('\n\n')}`);
+    }
+
+    if (cmd === 'files') {
+      const target = arg ? fuzzyFindGoal(goals, arg, recentMessages) : goals[0];
+      if (!target) return tgReply('No goal found.');
+      const files = workspace.listFiles(target.id);
+      if (!files.length) return tgReply(`*${target.text.substring(0, 40)}*\n\nWorkspace is empty.`);
+      return tgReply(`*${target.text.substring(0, 40)}*\n\n${files.slice(0, 30).map(f => `📄 ${f}`).join('\n')}${files.length > 30 ? `\n... and ${files.length - 30} more` : ''}`);
+    }
+
+    if (cmd === 'fix') {
+      const target = fuzzyFindGoal(goals, arg, recentMessages);
+      if (!target) return tgReply(`No match for "${arg}".`);
+      const floors = listFloors(target.id);
+      const blocked = floors.find(f => f.status === 'blocked');
+      if (!blocked) return tgReply(`"${target.text.substring(0, 40)}" has no blocked floors.`);
+      const { fixFloor } = require('../agents/steven');
+      await tgReply(`Steven fixing "${blocked.name}"...`);
+      fixFloor(blocked.id).catch(e => tgReply(`Fix error: ${e.message}`));
+      return;
+    }
+
+    if (cmd === 'build') {
+      if (!arg) return tgReply('Usage: /elira_build <description>');
+      buildConfirmState = { waiting: true, goalText: arg };
+      return tgReply(`🤖 Hermès wants to build: *${arg}*\n\nSay *yes* to confirm or anything else to cancel.`);
+    }
+
+    if (cmd === 'restart') {
+      await tgReply('Restarting Hermes...');
+      setTimeout(() => process.exit(0), 500);
+      return;
+    }
+
+    if (cmd === 'update') {
+      // Delegate to the /update handler by re-setting userText
+      userText = 'update';
+      // Fall through — next block will catch it
+    }
+
+    if (cmd === 'help') {
+      return tgReply(`*Elira/Hermes commands*\n\n` +
+        `/elira_launch [name|#]  — run a build\n` +
+        `/elira_stop [name|#]    — stop a running build\n` +
+        `/elira_running          — list running builds\n` +
+        `/elira_build <desc>     — start a new build\n` +
+        `/elira_status           — list all goals\n` +
+        `/elira_fix [name|#]     — Steven fix a blocked floor\n` +
+        `/elira_files [name|#]   — list workspace files\n` +
+        `/elira_update           — check Hermes upstream\n` +
+        `/elira_restart          — restart the server\n\n` +
+        `Underscore or space after prefix both work.\n` +
+        `Also: /hermes <task> routes anything to Claude Code with workspace context.`);
+    }
+
+    if (cmd === 'chat') {
+      // Treat the arg as a pure chat message — bypass all fast-paths
+      userText = arg || 'hello';
+      // Fall through to chat handler at the bottom
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════
   // STEP 0.5: Pending Hermes task follow-up detection
   // If there's a Hermes/Claude Code task in flight and the user sends a
   // follow-up ("is it done?", "how's it going?"), report on THAT task
@@ -484,20 +688,11 @@ async function handleTelegramMessage(userText) {
   if (isLaunchCommand) {
     const launcher = require('../launcher');
     const goals = listGoals();
-    let target = null;
-    if (!launchTarget) {
-      // "run" / "launch" / "run it" — pick the most recently discussed goal from chat
-      // Fall back to most recent goal_met
-      const recentText = recentMessages.slice(-6).map(m => m.content).join(' ').toLowerCase();
-      target = goals.find(g => recentText.includes(g.text.substring(0, 30).toLowerCase()))
-            || goals.find(g => g.status === 'goal_met')
-            || goals[0];
-    } else if (/^\d+$/.test(launchTarget)) {
-      target = goals[parseInt(launchTarget) - 1];
-    } else {
-      target = goals.find(g => g.text.toLowerCase().includes(launchTarget.toLowerCase()));
+    let target = fuzzyFindGoal(goals, launchTarget, recentMessages);
+    if (!target) {
+      const list = goals.slice(0, 8).map((g, i) => `${i + 1}. ${g.status === 'goal_met' ? '✅' : '⏳'} ${g.text.substring(0, 50)}`).join('\n');
+      return tgReply(`No match for "${launchTarget || 'that'}". Pick one:\n\n${list}\n\nOr say /elira_launch <number>`);
     }
-    if (!target) return tgReply(`Goal "${launchTarget}" not found.`);
     await tgReply(`🚀 Launching "${target.text.substring(0, 50)}"...`);
     setImmediate(async () => {
       try {
@@ -505,7 +700,29 @@ async function handleTelegramMessage(userText) {
         if (result.ok) {
           await tgReply(`✅ *Running*\n${target.text.substring(0, 50)}\n\n${result.url}\nPID: ${result.pid}\nKind: ${result.kind}\n\nReply "stop" to stop.`);
         } else {
-          await tgReply(`❌ Launch failed: ${result.error}`);
+          // Launch failed — auto-route to Hermes to diagnose and fix
+          await tgReply(`❌ Launch failed: ${result.error}\n\nRouting to Hermes to diagnose + fix...`);
+          const { claudeCode } = require('../claude-code');
+          const cwd = workspace.getWorkspacePath(target.id);
+          let credCtx = '';
+          try { credCtx = require('../credentials').buildCredentialContext(cwd); } catch (_) {}
+          const fixTask = `You are Hermes with filesystem + shell access. A launch attempt failed.\n\nGoal: "${target.text}"\nWorkspace: ${cwd}\nLauncher error: ${result.error}${credCtx}\n\nYour job:\n1. List files in the workspace (ls)\n2. Find the real entry point — look for telegram_bot.py, bot.py, main.py, app.py, server.py, OR any .py file containing "if __name__ == '__main__'"\n3. Install any missing deps from requirements.txt (pip3 install -r requirements.txt)\n4. Start the process in the BACKGROUND with nohup python3 <entry>.py > /tmp/bot.log 2>&1 &\n5. Wait 3 seconds, check if the process is still alive (ps aux | grep)\n6. Report the PID and where logs are going\n\nCredentials are already in .env — NEVER ask the user for them.`;
+          pendingHermesTask = { description: `Fix launch: ${target.text.substring(0, 40)}`, goalName: target.text.substring(0, 60), startedAt: Date.now(), status: 'running', result: null, error: null, finishedAt: null };
+          try {
+            const r = await claudeCode(fixTask, { cwd });
+            if (r.success) {
+              pendingHermesTask.status = 'done';
+              pendingHermesTask.result = r.output;
+              pendingHermesTask.finishedAt = Date.now();
+              const out = r.output.length > 3500 ? r.output.substring(0, 3500) + '\n...(truncated)' : r.output;
+              await tgReply(`*Hermes fixed it* (${Math.round(r.durationMs / 1000)}s)\n\n${out}`);
+            } else {
+              pendingHermesTask.status = 'failed';
+              pendingHermesTask.error = r.error;
+              pendingHermesTask.finishedAt = Date.now();
+              await tgReply(`Hermes couldn't fix it: ${r.error.substring(0, 400)}`);
+            }
+          } catch (e) { await tgReply(`Hermes error: ${e.message}`); }
         }
       } catch (err) { tgReply(`Launch error: ${err.message}`); }
     });
