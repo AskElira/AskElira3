@@ -411,7 +411,7 @@ async function handleTelegramMessage(userText) {
   // Underscore or space after prefix both work: /elira_launch OR /elira launch
   // ════════════════════════════════════════════════════════════════
 
-  const slashMatch = userText.match(/^(?:elira|hermes)[_\s]+(launch|run|stop|build|status|fix|goals|files|running|launches|restart|update|help|kill|chat)\b\s*(.*)$/i);
+  const slashMatch = userText.match(/^(?:elira|hermes)[_\s]+(launch|run|stop|build|status|fix|goals|files|running|launches|restart|update|help|kill|chat|digest)\b\s*(.*)$/i);
   if (slashMatch) {
     const cmd = slashMatch[1].toLowerCase();
     const arg = slashMatch[2].trim();
@@ -529,6 +529,12 @@ async function handleTelegramMessage(userText) {
       return;
     }
 
+    if (cmd === 'digest') {
+      await tgReply('Sending digest now...');
+      triggerNow().catch(e => tgReply(`Digest error: ${e.message}`));
+      return;
+    }
+
     if (cmd === 'update') {
       // Delegate to the /update handler by re-setting userText
       userText = 'update';
@@ -544,10 +550,12 @@ async function handleTelegramMessage(userText) {
         `/elira_status           — list all goals\n` +
         `/elira_fix [name|#]     — Steven fix a blocked floor\n` +
         `/elira_files [name|#]   — list workspace files\n` +
+        `/elira_digest           — send daily digest now\n` +
         `/elira_update           — check Hermes upstream\n` +
         `/elira_restart          — restart the server\n\n` +
         `Underscore or space after prefix both work.\n` +
-        `Also: /hermes <task> routes anything to Claude Code with workspace context.`);
+        `Everything else → Hermes chat with full goal context.\n` +
+        `Action verbs (fix/debug/install/run + file references) auto-route to Claude Code.`);
     }
 
     if (cmd === 'chat') {
@@ -663,95 +671,14 @@ async function handleTelegramMessage(userText) {
   // STEP 2: Fast-path for unambiguous single-word/phrase commands
   // ════════════════════════════════════════════════════════════════
 
-  // Launch / stop a build — only matches SHORT, simple references
-  // Anything complex (API keys, sentences, file paths) falls through to Hermes auto-routing
+  // All natural-language command fast-paths have been removed.
+  // System commands (launch/stop/status/build/fix/digest/files/running) require
+  // explicit /elira_X prefix. Everything else flows through the intent
+  // classifier + chat handler so Hermes answers with full goal context.
+  //
+  // Pattern used by handleSecretCapture — kept here because the action router
+  // below still uses it to detect credentials in user messages.
   const SECRET_PATTERN = /(sk-[a-zA-Z0-9_-]{20,}|sk-ant-[a-zA-Z0-9_-]{20,}|am_us_[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{20,}|api[_-]?key|password)/i;
-  const isSimpleLaunchRef = (text) => {
-    if (!text) return true;
-    if (SECRET_PATTERN.test(text)) return false;
-    if (text.length > 50) return false;
-    if (text.includes(',') || text.includes('.') || text.split(/\s+/).length > 8) return false;
-    return true;
-  };
-
-  const rawLaunchMatch = lower.match(/^(?:launch|run|start)(?:\s+(?:it|this|that|for me))?\s*(.*)$/i);
-  const launchTarget = rawLaunchMatch ? rawLaunchMatch[1].trim() : null;
-  const isLaunchCommand = rawLaunchMatch && isSimpleLaunchRef(launchTarget);
-
-  const stopMatch = lower.match(/^stop(?:\s+(?:it|this|that))?\s*(.*)$/i);
-  const stopTarget = stopMatch ? stopMatch[1].trim() : null;
-  const isStopCommand = stopMatch && isSimpleLaunchRef(stopTarget);
-
-  if (isLaunchCommand) {
-    const launcher = require('../launcher');
-    const goals = listGoals();
-    let target = fuzzyFindGoal(goals, launchTarget, recentMessages);
-    if (!target) {
-      const list = goals.slice(0, 8).map((g, i) => `${i + 1}. ${g.status === 'goal_met' ? '✅' : '⏳'} ${g.text.substring(0, 50)}`).join('\n');
-      return tgReply(`No match for "${launchTarget || 'that'}". Pick one:\n\n${list}\n\nOr say /elira_launch <number>`);
-    }
-    await tgReply(`🚀 Launching "${target.text.substring(0, 50)}"...`);
-    setImmediate(async () => {
-      try {
-        const result = await launcher.launch(target.id);
-        if (result.ok) {
-          await tgReply(`✅ *Running*\n${target.text.substring(0, 50)}\n\n${result.url}\nPID: ${result.pid}\nKind: ${result.kind}\n\nReply "stop" to stop.`);
-        } else {
-          // Launch failed — auto-route to Hermes to diagnose and fix
-          await tgReply(`❌ Launch failed: ${result.error}\n\nRouting to Hermes to diagnose + fix...`);
-          const { claudeCode } = require('../claude-code');
-          const cwd = workspace.getWorkspacePath(target.id);
-          let credCtx = '';
-          try { credCtx = require('../credentials').buildCredentialContext(cwd); } catch (_) {}
-          const fixTask = `You are Hermes with filesystem + shell access. A launch attempt failed.\n\nGoal: "${target.text}"\nWorkspace: ${cwd}\nLauncher error: ${result.error}${credCtx}\n\nYour job:\n1. List files in the workspace (ls)\n2. Find the real entry point — look for telegram_bot.py, bot.py, main.py, app.py, server.py, OR any .py file containing "if __name__ == '__main__'"\n3. Install any missing deps from requirements.txt (pip3 install -r requirements.txt)\n4. Start the process in the BACKGROUND with nohup python3 <entry>.py > /tmp/bot.log 2>&1 &\n5. Wait 3 seconds, check if the process is still alive (ps aux | grep)\n6. Report the PID and where logs are going\n\nCredentials are already in .env — NEVER ask the user for them.`;
-          pendingHermesTask = { description: `Fix launch: ${target.text.substring(0, 40)}`, goalName: target.text.substring(0, 60), startedAt: Date.now(), status: 'running', result: null, error: null, finishedAt: null };
-          try {
-            const r = await claudeCode(fixTask, { cwd });
-            if (r.success) {
-              pendingHermesTask.status = 'done';
-              pendingHermesTask.result = r.output;
-              pendingHermesTask.finishedAt = Date.now();
-              const out = r.output.length > 3500 ? r.output.substring(0, 3500) + '\n...(truncated)' : r.output;
-              await tgReply(`*Hermes fixed it* (${Math.round(r.durationMs / 1000)}s)\n\n${out}`);
-            } else {
-              pendingHermesTask.status = 'failed';
-              pendingHermesTask.error = r.error;
-              pendingHermesTask.finishedAt = Date.now();
-              await tgReply(`Hermes couldn't fix it: ${r.error.substring(0, 400)}`);
-            }
-          } catch (e) { await tgReply(`Hermes error: ${e.message}`); }
-        }
-      } catch (err) { tgReply(`Launch error: ${err.message}`); }
-    });
-    return;
-  }
-
-  if (isStopCommand) {
-    const launcher = require('../launcher');
-    const running = launcher.listRunning();
-    if (running.length === 0) return tgReply('No builds are running.');
-    let target = null;
-    if (!stopTarget) {
-      target = running[0]; // most recent
-    } else {
-      const goals = listGoals();
-      const matching = goals.find(g => g.text.toLowerCase().includes(stopTarget.toLowerCase()));
-      if (matching) target = running.find(r => r.goalId === matching.id);
-    }
-    if (!target) return tgReply(`No running build matches "${stopTarget}".`);
-    const result = await launcher.stop(target.goalId);
-    return tgReply(result.ok ? `⏹ Stopped (was on port ${target.port})` : `Stop failed: ${result.error}`);
-  }
-
-  // Bare-word fast-paths (status/goals/files/fix/running) have been removed.
-  // Use explicit /elira_X commands for those actions. Everything else flows
-  // through the intent classifier + chat so Hermes can respond with context.
-
-  if (/^(digest|send digest|send email|news)$/i.test(lower)) {
-    await tgReply('Sending digest now...');
-    triggerNow().catch(e => tgReply(`Digest error: ${e.message}`));
-    return;
-  }
 
   // ════════════════════════════════════════════════════════════════
   // STEP 2b: Numbered responses ("1", "2", "3") — resolve from context
